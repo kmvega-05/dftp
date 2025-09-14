@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"dftp-server/entities"
-	"dftp-server/modules/user_management"  
+	"dftp-server/modules/user_management"
 )
 
 // HandleCommand procesa los comandos de autenticación y reinicio
@@ -24,23 +24,22 @@ func HandleCommand(session *entities.Session, cmd entities.Command) {
 }
 
 // handleUSER guarda el usuario pendiente en la sesión
-func handleUSER(session *entities.Session, args []string ) {
-	if len(args) == 0 {
-		session.Conn.Write([]byte("501 Syntax error : [command USER expecting 1 argument(s)] \r\n"))
+func handleUSER(session *entities.Session, args []string) {
+	if len(args) < 1 {
+		session.Conn.Write([]byte("501 Syntax error : [command USER expecting 1 argument(s)]\r\n"))
 		return
 	}
 
 	username := args[0]
 
 	// Mantener todos los campos iguales excepto PendingUser
-	session.Update(session.CurrentUser, session.IsAuthenticated, session.WorkingDir, username)
+	session.Update(session.CurrentUser, session.IsAuthenticated, session.VirtualWorkingDir, username)
 	session.Conn.Write([]byte("331 User name okay, need password\r\n"))
 }
 
 // handlePASS valida el password usando user_management_module
-
 func handlePASS(session *entities.Session, args []string) {
-	if len(args) == 0 {
+	if len(args) < 1 {
 		session.Conn.Write([]byte("501 Syntax error : [command PASS expecting 1 argument(s)]\r\n"))
 		return
 	}
@@ -65,7 +64,8 @@ func handlePASS(session *entities.Session, args []string) {
 		return
 	}
 
-	session.Update(user, true, user.Home, "")
+	// Al iniciar sesión, la ruta virtual empieza en "/"
+	session.Update(user, true, "/", "")
 	session.Conn.Write([]byte("230 User logged in, proceed\r\n"))
 }
 
