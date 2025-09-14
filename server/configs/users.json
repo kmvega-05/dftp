@@ -2,12 +2,12 @@
   "users": [
     {
       "username": "test",
-      "password": "$2a$10$N9qo8uLOickgx2ZMRZo4ieWl9rZp3t9kq9UZEM6ZjmxvJtkseXmCy",
+      "password": "$2a$10$CjKc0W94fm4yg72zlT4DrOkrvePV2TnZFznPTaPtwNN7VEJpi8JCO",
       "home": "/home/test"
     },
     {
       "username": "admin",
-      "password": "$2a$10$z3FqM.7dU0e2x5YQyOQoeedZG9kx2vNhbbX6YsJhBKt3vnDnN/SdC",
+      "password": "$2a$10$hF6asryjH8TePS0mWy/KiOxilw3BLg.W5yJLUlKNr8oKcE2WkXOnu",
       "home": "/home/admin"
     }
   ]

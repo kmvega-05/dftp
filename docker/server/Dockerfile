@@ -1,6 +1,9 @@
-FROM golang:1.22 
+FROM golang:1.24 
 
 WORKDIR /app
+
+COPY server/go.mod server/go.sum ./
+RUN go mod download
 
 COPY server/ ./
 
@@ -9,6 +12,5 @@ RUN go build -o ftp-server .
 RUN mkdir -p /configs
 
 EXPOSE 21
-EXPOSE 20
 
 CMD ["./ftp-server"]

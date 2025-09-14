@@ -1,12 +1,11 @@
-package modules
+package user_management
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
 
-	"dftp/src/server/entities"
-
+	"dftp-server/entities"
 	"golang.org/x/crypto/bcrypt"
 )
 
