@@ -1,14 +1,12 @@
-FROM golang:1.21-alpine
+FROM golang:1.22 
 
 WORKDIR /app
 
-COPY src/server/ ./
+COPY server/ ./
 
 RUN go build -o ftp-server .
 
-RUN mkdir -p /data
-
-COPY src/server/data/users.json /data/users.json
+RUN mkdir -p /configs
 
 EXPOSE 21
 EXPOSE 20

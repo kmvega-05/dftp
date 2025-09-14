@@ -1,9 +1,9 @@
-FROM golang:1.21-alpine
+FROM golang:1.22 
 
 WORKDIR /app
 
 # Copiamos el código del cliente
-COPY src/client/ ./
+COPY client/ ./
 
 # Construimos la aplicación del cliente
 RUN go build -o ftp-client .
