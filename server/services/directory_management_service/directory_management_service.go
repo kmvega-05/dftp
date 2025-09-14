@@ -49,6 +49,12 @@ func HandleCWD(session *entities.Session, args []string) {
 	
 	fmt.Println("Ruta real buscada:", newReal)
 
+	// Verificar que la nueva ruta real esté dentro del home del usuario
+	if !fsm.IsInsideBase(newReal, session.CurrentUser.Home) {
+        session.Conn.Write([]byte("550 Permission denied.\r\n"))
+        return
+    }
+
 	// Verificar existencia
 	if !fsm.DirExists(newReal) {
 		session.Conn.Write([]byte("550 Directory not found.\r\n"))
@@ -67,11 +73,6 @@ func HandleCDUP(session *entities.Session, args []string) {
 		return
 	}
 
-	if session.VirtualWorkingDir == "/" {
-	session.Conn.Write([]byte("550 Already at root directory.\r\n"))
-	return
-}
-
 	// Calcular el directorio padre de forma segura
 	parentVirtual := fsm.ParentDir(session.VirtualWorkingDir)
 	parentReal := fsm.VirtualToReal(session.CurrentUser.Home, parentVirtual)
@@ -85,5 +86,5 @@ func HandleCDUP(session *entities.Session, args []string) {
 
 	// Actualizar ruta virtual
 	session.VirtualWorkingDir = parentVirtual
-	session.Conn.Write([]byte("200 Directory successfully changed to parent.\r\n"))
+	session.Conn.Write([]byte("200 Operation succesfully executed.\r\n"))
 }
