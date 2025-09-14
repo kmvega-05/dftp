@@ -14,6 +14,10 @@ func HandleCommand(session *entities.Session, cmd entities.Command) {
 		HandleCWD(session, cmd.Args)
 	case "CDUP":
 		HandleCDUP(session, cmd.Args)
+	case "MKD":
+		HandleMKD(session, cmd.Args)
+	case "RMD":
+		HandleRMD(session, cmd.Args)
 	default:
 		session.Conn.Write([]byte("502 Comando no implementado\r\n"))
 	}
@@ -87,4 +91,57 @@ func HandleCDUP(session *entities.Session, args []string) {
 	// Actualizar ruta virtual
 	session.VirtualWorkingDir = parentVirtual
 	session.Conn.Write([]byte("200 Operation succesfully executed.\r\n"))
+}
+
+// HandleMKD crea un nuevo directorio
+// Si se usa una ruta absoluta, se crea desde el root del home del usuario
+// Si se usa una ruta relativa, se crea desde el directorio virtual actual
+func HandleMKD(session *entities.Session, args []string) {
+	if !session.IsAuthenticated {
+		session.Conn.Write([]byte("530 Not logged in.\r\n"))
+		return
+	}
+
+	if len(args) < 1 {
+		session.Conn.Write([]byte("501 Missing directory name.\r\n"))
+		return
+	}
+
+	dirArg := args[0]
+
+	// Delega la creación del directorio al File System Manager
+	virtualPath, err := fsm.CreateDir(session.CurrentUser.Home, session.VirtualWorkingDir, dirArg)
+	if err != nil {
+		session.Conn.Write([]byte(fmt.Sprintf("550 %s\r\n", err.Error())))
+		return
+	}
+
+	session.Conn.Write([]byte(fmt.Sprintf("257 \"%s\" directory created.\r\n", virtualPath)))
+}
+
+
+// HandleRMD elimina un directorio vacío
+// Si se usa una ruta absoluta, se elimina desde el root del home del usuario
+// Si se usa una ruta relativa, se elimina desde el directorio virtual actual
+func HandleRMD(session *entities.Session, args []string) {
+	if !session.IsAuthenticated {
+		session.Conn.Write([]byte("530 Not logged in.\r\n"))
+		return
+	}
+
+	if len(args) < 1 {
+		session.Conn.Write([]byte("501 Missing directory name.\r\n"))
+		return
+	}
+
+	dirArg := args[0]
+
+	// Delega la eliminiación del directorio al File System Manager
+	virtualPath, err := fsm.RemoveDir(session.CurrentUser.Home, session.VirtualWorkingDir, dirArg)
+	if err != nil {
+		session.Conn.Write([]byte(fmt.Sprintf("550 %s\r\n", err.Error())))
+		return
+	}
+
+	session.Conn.Write([]byte(fmt.Sprintf("250 Directory \"%s\" removed.\r\n", virtualPath)))
 }

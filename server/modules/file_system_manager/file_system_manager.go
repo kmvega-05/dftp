@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"errors"
 )
 
 // DirExists verifica si el path existe y es un directorio real
@@ -12,8 +13,6 @@ func DirExists(path string) bool {
 	path = filepath.Clean(path) // normaliza separadores y elimina redundancias
 	info, err := os.Stat(path)
 	if err != nil {
-		fmt.Println("DirExists error:", err)
-		fmt.Println("Path usado:", path)
 		return false
 	}
 	return info.IsDir()
@@ -43,6 +42,11 @@ func IsInsideBase(path, base string) bool {
 	return strings.HasPrefix(absPath, absBase)
 }
 
+// ResolveVirtualPath resuelve una ruta virtual basada en el home del usuario y el directorio virtual actual
+// Crea la ruta virtual tanto para rutas absolutas como relativas
+// home: ruta real del home del usuario (ej: /srv/ftp/alice)
+// currentVirtual: ruta virtual actual (ej: "/", "/docs")
+// dirArg: argumento de directorio proporcionado por el usuario (ej: "docs", "/docs", "../docs")
 func ResolveVirtualPath(home, currentVirtual, dirArg string) string {
 	var newVirtual string
 
@@ -68,4 +72,80 @@ func VirtualToReal(home, virtualPath string) string {
 	}
 
 	return filepath.Join(home, cleanVirtual)
+}
+
+// CreateDir intenta crear un directorio virtual dentro del home del usuario.
+// Retorna la ruta virtual normalizada creada, o un error si falla.
+func CreateDir(home, currentVirtual, dirArg string) (string, error) {
+	if dirArg == "" {
+		return "", errors.New("Missing directory name")
+	}
+
+	// 1. Resolver ruta virtual
+	virtualPath := ResolveVirtualPath(home, currentVirtual, dirArg)
+	realPath := VirtualToReal(home, virtualPath)
+
+	// 2. Seguridad: validar que esté dentro del home
+	if !IsInsideBase(realPath, home) {
+		return "", errors.New("Access denied")
+	}
+
+	// 3. Verificar si ya existe
+	if DirExists(realPath) {
+		return "", errors.New("Directory already exists")
+	}
+
+	// 4. Intentar crear
+	err := os.Mkdir(realPath, 0755)
+	if err != nil {
+		return "", err
+	}
+
+	return virtualPath, nil
+}
+
+// RemoveDir intenta eliminar un directorio virtual dentro del home del usuario.
+// Retorna la ruta virtual normalizada eliminada, o un error si falla.
+func RemoveDir(home, currentVirtual, dirArg string) (string, error) {
+	if dirArg == "" {
+		return "", errors.New("Missing directory name")
+	}
+
+	// 1. Resolver ruta virtual
+	virtualPath := ResolveVirtualPath(home, currentVirtual, dirArg)
+	realPath := VirtualToReal(home, virtualPath)
+
+	// 2. Seguridad: validar que esté dentro del home
+	if !IsInsideBase(realPath, home) {
+		return "", errors.New("Access denied")
+	}
+
+	// 3. Verificar existencia y tipo
+	info, err := os.Stat(realPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", errors.New("No such file or directory")
+		}
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("Not a directory")
+	}
+
+	// 4. Comprobar si está vacío
+	entries, err := os.ReadDir(realPath)
+	if err != nil {
+		return "", err
+	}
+	if len(entries) > 0 {
+		return "", errors.New("Directory not empty")
+	}
+
+	// 5. Intentar borrar
+	err = os.Remove(realPath)
+	if err != nil {
+		return "", err
+	}
+
+	return virtualPath, nil
 }

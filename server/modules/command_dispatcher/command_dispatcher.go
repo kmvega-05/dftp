@@ -27,7 +27,7 @@ func CommandDispatcher(session *entities.Session) {
 			case "USER", "PASS", "REIN", "ACCT":
 				auth_and_session_service.HandleCommand(session, cmd)
 			
-			case "PWD", "CWD", "CDUP":
+			case "PWD", "CWD", "CDUP", "MKD", "RMD":
 				directory_management_service.HandleCommand(session, cmd)
 
 			// Cierre de conexión  
