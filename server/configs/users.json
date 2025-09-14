@@ -1,0 +1,14 @@
+{
+  "users": [
+    {
+      "username": "test",
+      "password": "12345",
+      "home": "/home/test"
+    },
+    {
+      "username": "admin",
+      "password": "admin",
+      "home": "/home/admin"
+    }
+  ]
+}
