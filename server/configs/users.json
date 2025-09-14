@@ -2,12 +2,12 @@
   "users": [
     {
       "username": "test",
-      "password": "12345",
+      "password": "$2a$10$N9qo8uLOickgx2ZMRZo4ieWl9rZp3t9kq9UZEM6ZjmxvJtkseXmCy",
       "home": "/home/test"
     },
     {
       "username": "admin",
-      "password": "admin",
+      "password": "$2a$10$z3FqM.7dU0e2x5YQyOQoeedZG9kx2vNhbbX6YsJhBKt3vnDnN/SdC",
       "home": "/home/admin"
     }
   ]
