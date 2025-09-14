@@ -41,7 +41,7 @@ docker run -d \
     --name ftp-server \
     -p 21:21 \
     -p 20:20 \
-    -v "$(pwd)/src/server/data:/data" \
+    -v "$(pwd)/server/configs:/configs" \
     ftp-server
 
 echo -e "${GREEN}✓ Servidor iniciado en segundo plano${NC}"
