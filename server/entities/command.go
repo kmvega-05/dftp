@@ -17,7 +17,7 @@ func ParseCommand(line string) Command {
 	// Dividir por espacios
 	parts := strings.Fields(line)
 
-	if len(parts) == 0 {
+	if len(parts) < 1 {
 		return Command{Name: "", Args: []string{}}
 	}
 

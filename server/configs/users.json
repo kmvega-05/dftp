@@ -3,12 +3,12 @@
     {
       "username": "test",
       "password": "$2a$10$CjKc0W94fm4yg72zlT4DrOkrvePV2TnZFznPTaPtwNN7VEJpi8JCO",
-      "home": "/home/test"
+      "home": "/app/test_fs/test"
     },
     {
       "username": "admin",
       "password": "$2a$10$hF6asryjH8TePS0mWy/KiOxilw3BLg.W5yJLUlKNr8oKcE2WkXOnu",
-      "home": "/home/admin"
+      "home": "/app/test_fs/admin"
     }
   ]
 }
