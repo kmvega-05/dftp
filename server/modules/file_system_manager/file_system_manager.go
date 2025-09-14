@@ -54,12 +54,6 @@ func ResolveVirtualPath(home, currentVirtual, dirArg string) string {
 		newVirtual = NormalizePath(JoinPath(currentVirtual, dirArg))
 	}
 
-	// Normalizamos y aseguramos que nunca salga del home
-	realPath := VirtualToReal(home, newVirtual)
-	if !IsInsideBase(realPath, home) {
-		return string(filepath.Separator) // "/", raíz virtual
-	}
-
 	return newVirtual
 }
 
