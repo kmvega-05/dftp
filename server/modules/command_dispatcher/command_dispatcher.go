@@ -7,6 +7,7 @@ import (
 	"dftp-server/entities"
 	"dftp-server/services/auth_and_session_service"
 	"dftp-server/services/directory_management_service"
+	"dftp-server/services/file_transfer_service"
 )
 
 // CommandDispatcher escucha comandos del cliente y los procesa
@@ -23,12 +24,17 @@ func CommandDispatcher(session *entities.Session) {
 		cmd := entities.ParseCommand(line)
 		switch cmd.Name {
 
-			// Comandos relacionados con autenticación y sesión
+			// Autenticación y sesión
 			case "USER", "PASS", "REIN", "ACCT":
 				auth_and_session_service.HandleCommand(session, cmd)
 			
+			// Gestión de directorios
 			case "PWD", "CWD", "CDUP", "MKD", "RMD":
 				directory_management_service.HandleCommand(session, cmd)
+
+			// Transferencia de archivos
+			case "PASV", "PORT", "LIST", "RETR", "STOR":
+				file_transfer_service.HandleCommand(session, cmd)
 
 			// Cierre de conexión  
 			case "QUIT":
