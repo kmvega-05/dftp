@@ -1,7 +1,6 @@
 package file_system_manager
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
