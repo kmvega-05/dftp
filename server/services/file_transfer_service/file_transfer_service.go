@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"strconv"
 	"dftp-server/entities"
 )
 
@@ -27,23 +28,31 @@ func HandleCommand(session *entities.Session, cmd entities.Command) {
 	case "STOR":
 		handleSTOR(session, cmd.Args)
 	default:
-		session.Conn.Write([]byte("502 Comando no implementado\r\n"))
+		session.ControlConn.Write([]byte("502 Comando no implementado\r\n"))
 	}
 }
 
-// handlePASV inicia un listener TCP para transferencia de datos pasiva
 func handlePASV(session *entities.Session) {
 	if !session.IsAuthenticated {
-		session.Conn.Write([]byte("530 Not logged in.\r\n"))
+		session.ControlConn.Write([]byte("530 Not logged in.\r\n"))
 		return
+	}
+
+	// Si ya había un listener/conexión previa, cerrarla
+	if session.PasvListener != nil {
+		session.PasvListener.Close()
+		session.PasvListener = nil
+	}
+	if session.DataConn != nil {
+		session.DataConn.Close()
+		session.DataConn = nil
 	}
 
 	var listener net.Listener
 	var port int
 	var err error
 
-	// Elegir un puerto libre dentro del rango
-	
+	// Buscar puerto disponible en rango
 	for p := PasvPortMin; p <= PasvPortMax; p++ {
 		listener, err = net.Listen("tcp", fmt.Sprintf(":%d", p))
 		if err == nil {
@@ -52,24 +61,33 @@ func handlePASV(session *entities.Session) {
 		}
 	}
 	if err != nil {
-		session.Conn.Write([]byte("425 Can't open data connection.\r\n"))
+		session.ControlConn.Write([]byte("425 Can't open data connection.\r\n"))
 		return
 	}
 
-	// Obtener IP del servidor
-	serverAddr := session.Conn.LocalAddr().(*net.TCPAddr)
-	ipParts := strings.Split(serverAddr.IP.String(), ".")
+	// Guardar en sesión
+	session.PasvListener = listener
+	session.DataMode = entities.DataPassive
 
-	// Calcular p1 y p2 para el puerto
+	// Obtener IP del servidor (mejor si se configura externamente)
+	serverAddr := session.ControlConn.LocalAddr().(*net.TCPAddr)
+	ipParts := strings.Split(serverAddr.IP.To4().String(), ".")
+
+	// Calcular p1,p2
 	p1 := port / 256
 	p2 := port % 256
 
-	// Construir respuesta
+	// Respuesta 227
 	response := fmt.Sprintf("227 Entering Passive Mode (%s,%s,%s,%s,%d,%d).\r\n",
 		ipParts[0], ipParts[1], ipParts[2], ipParts[3], p1, p2)
-	session.Conn.Write([]byte(response))
+	session.ControlConn.Write([]byte(response))
 
-	// Esperar que el cliente se conecte (goroutine)
+	// Print de depuración
+	fmt.Println("=== PASV Debug ===")
+	fmt.Println("Listener:", session.PasvListener.Addr())
+	fmt.Println("DataMode:", session.DataMode)
+
+	// Esperar conexión en goroutine
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -78,17 +96,68 @@ func handlePASV(session *entities.Session) {
 		}
 
 		session.DataConn = conn
-		
-		// Cerrar listener, ya no se necesita
-		listener.Close()
+
+		// Una vez aceptado, cerramos el listener
+		session.PasvListener.Close()
+		session.PasvListener = nil
 	}()
 }
 
+
 func handlePORT(session *entities.Session, args []string) {
-	// 1. Validar autenticación
-	// 2. Parsear IP y puerto desde args
-	// 3. Guardar en session.DataIP y session.DataPort
-	// 4. Preparar session.DataConn para la conexión activa
+	
+	if len(args) == 0 {
+    session.ControlConn.Write([]byte("501 Missing argument.\r\n"))
+    return
+	}
+	
+	if !session.IsAuthenticated {
+		session.ControlConn.Write([]byte("530 Not logged in.\r\n"))
+		return
+	}
+
+	// Cerrar cualquier conexión previa
+	if session.DataConn != nil {
+		session.DataConn.Close()
+		session.DataConn = nil
+	}
+	if session.PasvListener != nil {
+		session.PasvListener.Close()
+		session.PasvListener = nil
+	}
+
+	arg := args[0]
+
+	parts := strings.Split(arg, ",")
+	if len(parts) != 6 {
+		session.ControlConn.Write([]byte("501 Syntax error in parameters.\r\n"))
+		return
+	}
+
+	// Construir dirección IP
+	ip := fmt.Sprintf("%s.%s.%s.%s", parts[0], parts[1], parts[2], parts[3])
+
+	// Calcular puerto
+	p1, err1 := strconv.Atoi(parts[4])
+	p2, err2 := strconv.Atoi(parts[5])
+	if err1 != nil || err2 != nil {
+		session.ControlConn.Write([]byte("501 Invalid port numbers.\r\n"))
+		return
+	}
+	port := p1*256 + p2
+
+	// Guardar en sesión
+	session.ActiveHost = ip
+	session.ActivePort = port
+	session.DataMode = entities.DataActive
+
+	session.ControlConn.Write([]byte("200 PORT command successful.\r\n"))
+
+	// Print de depuración
+	fmt.Println("=== PORT Debug ===")
+	fmt.Println("ActiveHost:", session.ActiveHost)
+	fmt.Println("ActivePort:", session.ActivePort)
+	fmt.Println("DataMode:", session.DataMode)
 }
 
 func handleLIST(session *entities.Session, args []string) {
