@@ -3,9 +3,8 @@ package connection_manager
 import (
 	"fmt"
 	"net"
-
 	"dftp-server/entities"
-	"dftp-server/modules/command_dispatcher"
+	cmd_handler "dftp-server/modules/command_handler" 
 )
 
 // Inicia la conexión con un cliente FTP
@@ -18,8 +17,8 @@ func HandleClient(conn net.Conn) {
 	// Enviar banner de bienvenida FTP
 	session.ControlConn.Write([]byte("220 Bienvenido al servidor FTP\r\n"))
 
-	// Delegar al CommandDispatcher
-	command_dispatcher.CommandDispatcher(session)
+	// Delegar al CommandHandler
+	cmd_handler.DispatchCommand(session)
 
 	fmt.Println("Cliente desconectado:", conn.RemoteAddr())
 }
