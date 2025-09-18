@@ -12,7 +12,7 @@ import (
 
 // CommandDispatcher escucha comandos del cliente y los procesa
 func CommandDispatcher(session *entities.Session) {
-	reader := bufio.NewReader(session.Conn)
+	reader := bufio.NewReader(session.ControlConn)
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -38,11 +38,11 @@ func CommandDispatcher(session *entities.Session) {
 
 			// Cierre de conexión  
 			case "QUIT":
-			session.Conn.Write([]byte("221 Cerrando la conexión\r\n"))
+			session.ControlConn.Write([]byte("221 Cerrando la conexión\r\n"))
 			return
 
 			default:
-				session.Conn.Write([]byte("502 Comando no implementado\r\n"))
+				session.ControlConn.Write([]byte("502 Comando no implementado\r\n"))
 		}
 	}
 }

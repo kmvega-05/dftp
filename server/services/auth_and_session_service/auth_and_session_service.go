@@ -17,16 +17,16 @@ func HandleCommand(session *entities.Session, cmd entities.Command) {
 	case "REIN":
 		handleREIN(session)
 	case "ACCT":
-		session.Conn.Write([]byte("202 Comando ACCT no implementado\r\n"))
+		session.ControlConn.Write([]byte("202 Comando ACCT no implementado\r\n"))
 	default:
-		session.Conn.Write([]byte("502 Comando no implementado\r\n"))
+		session.ControlConn.Write([]byte("502 Comando no implementado\r\n"))
 	}
 }
 
 // handleUSER guarda el usuario pendiente en la sesión
 func handleUSER(session *entities.Session, args []string) {
 	if len(args) < 1 {
-		session.Conn.Write([]byte("501 Syntax error : [command USER expecting 1 argument(s)]\r\n"))
+		session.ControlConn.Write([]byte("501 Syntax error : [command USER expecting 1 argument(s)]\r\n"))
 		return
 	}
 
@@ -34,43 +34,43 @@ func handleUSER(session *entities.Session, args []string) {
 
 	// Mantener todos los campos iguales excepto PendingUser
 	session.Update(session.CurrentUser, session.IsAuthenticated, session.VirtualWorkingDir, username)
-	session.Conn.Write([]byte("331 User name okay, need password\r\n"))
+	session.ControlConn.Write([]byte("331 User name okay, need password\r\n"))
 }
 
 // handlePASS valida el password usando user_management_module
 func handlePASS(session *entities.Session, args []string) {
 	if len(args) < 1 {
-		session.Conn.Write([]byte("501 Syntax error : [command PASS expecting 1 argument(s)]\r\n"))
+		session.ControlConn.Write([]byte("501 Syntax error : [command PASS expecting 1 argument(s)]\r\n"))
 		return
 	}
 
 	password := args[0]
 
 	if session.PendingUser == "" {
-		session.Conn.Write([]byte("503 Bad sequence of commands\r\n"))
+		session.ControlConn.Write([]byte("503 Bad sequence of commands\r\n"))
 		return
 	}
 
 	db, err := user_management.LoadUsers("configs/users.json")
 	if err != nil {
-		session.Conn.Write([]byte("550 Error interno del servidor\r\n"))
+		session.ControlConn.Write([]byte("550 Error interno del servidor\r\n"))
 		return
 	}
 
 	user, ok := db.ValidateUser(session.PendingUser, password)
 	if !ok {
 		session.Update(nil, false, "/", "")
-		session.Conn.Write([]byte("530 Not logged in\r\n"))
+		session.ControlConn.Write([]byte("530 Not logged in\r\n"))
 		return
 	}
 
 	// Al iniciar sesión, la ruta virtual empieza en "/"
 	session.Update(user, true, "/", "")
-	session.Conn.Write([]byte("230 User logged in, proceed\r\n"))
+	session.ControlConn.Write([]byte("230 User logged in, proceed\r\n"))
 }
 
 // handleREIN resetea la sesión
 func handleREIN(session *entities.Session) {
 	session.Update(nil, false, "/", "")
-	session.Conn.Write([]byte("220 Session reset\r\n"))
+	session.ControlConn.Write([]byte("220 Session reset\r\n"))
 }

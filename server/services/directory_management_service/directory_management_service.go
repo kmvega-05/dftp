@@ -19,29 +19,29 @@ func HandleCommand(session *entities.Session, cmd entities.Command) {
 	case "RMD":
 		HandleRMD(session, cmd.Args)
 	default:
-		session.Conn.Write([]byte("502 Comando no implementado\r\n"))
+		session.ControlConn.Write([]byte("502 Comando no implementado\r\n"))
 	}
 }
 
 // HandlePWD devuelve la ruta virtual actual
 func HandlePWD(session *entities.Session, args []string) {
 	if !session.IsAuthenticated {
-		session.Conn.Write([]byte("530 Not logged in.\r\n"))
+		session.ControlConn.Write([]byte("530 Not logged in.\r\n"))
 		return
 	}
 
-	session.Conn.Write([]byte("257 \"" + session.VirtualWorkingDir + "\" is current directory.\r\n"))
+	session.ControlConn.Write([]byte("257 \"" + session.VirtualWorkingDir + "\" is current directory.\r\n"))
 }
 
 // HandleCWD cambia el directorio virtual actual
 func HandleCWD(session *entities.Session, args []string) {
 	if !session.IsAuthenticated {
-		session.Conn.Write([]byte("530 Not logged in.\r\n"))
+		session.ControlConn.Write([]byte("530 Not logged in.\r\n"))
 		return
 	}
 
 	if len(args) < 1 {
-		session.Conn.Write([]byte("550 Missing directory parameter.\r\n"))
+		session.ControlConn.Write([]byte("550 Missing directory parameter.\r\n"))
 		return
 	}
 
@@ -55,25 +55,25 @@ func HandleCWD(session *entities.Session, args []string) {
 
 	// Verificar que la nueva ruta real esté dentro del home del usuario
 	if !fsm.IsInsideBase(newReal, session.CurrentUser.Home) {
-        session.Conn.Write([]byte("550 Permission denied.\r\n"))
+        session.ControlConn.Write([]byte("550 Permission denied.\r\n"))
         return
     }
 
 	// Verificar existencia
 	if !fsm.DirExists(newReal) {
-		session.Conn.Write([]byte("550 Directory not found.\r\n"))
+		session.ControlConn.Write([]byte("550 Directory not found.\r\n"))
 		return
 	}
 
 	// Actualizar la ruta virtual en la sesión
 	session.VirtualWorkingDir = newVirtual
-	session.Conn.Write([]byte("250 Directory successfully changed.\r\n"))
+	session.ControlConn.Write([]byte("250 Directory successfully changed.\r\n"))
 }
 
 // HandleCDUP sube un nivel en el directorio virtual
 func HandleCDUP(session *entities.Session, args []string) {
 	if !session.IsAuthenticated {
-		session.Conn.Write([]byte("530 Not logged in.\r\n"))
+		session.ControlConn.Write([]byte("530 Not logged in.\r\n"))
 		return
 	}
 
@@ -84,13 +84,13 @@ func HandleCDUP(session *entities.Session, args []string) {
 	// Asegurar que no se salga del home
 	if !fsm.IsInsideBase(parentReal, session.CurrentUser.Home) {
 		session.VirtualWorkingDir = "/"
-		session.Conn.Write([]byte("200 Directory changed to root.\r\n"))
+		session.ControlConn.Write([]byte("200 Directory changed to root.\r\n"))
 		return
 	}
 
 	// Actualizar ruta virtual
 	session.VirtualWorkingDir = parentVirtual
-	session.Conn.Write([]byte("200 Operation succesfully executed.\r\n"))
+	session.ControlConn.Write([]byte("200 Operation succesfully executed.\r\n"))
 }
 
 // HandleMKD crea un nuevo directorio
@@ -98,12 +98,12 @@ func HandleCDUP(session *entities.Session, args []string) {
 // Si se usa una ruta relativa, se crea desde el directorio virtual actual
 func HandleMKD(session *entities.Session, args []string) {
 	if !session.IsAuthenticated {
-		session.Conn.Write([]byte("530 Not logged in.\r\n"))
+		session.ControlConn.Write([]byte("530 Not logged in.\r\n"))
 		return
 	}
 
 	if len(args) < 1 {
-		session.Conn.Write([]byte("501 Missing directory name.\r\n"))
+		session.ControlConn.Write([]byte("501 Missing directory name.\r\n"))
 		return
 	}
 
@@ -112,11 +112,11 @@ func HandleMKD(session *entities.Session, args []string) {
 	// Delega la creación del directorio al File System Manager
 	virtualPath, err := fsm.CreateDir(session.CurrentUser.Home, session.VirtualWorkingDir, dirArg)
 	if err != nil {
-		session.Conn.Write([]byte(fmt.Sprintf("550 %s\r\n", err.Error())))
+		session.ControlConn.Write([]byte(fmt.Sprintf("550 %s\r\n", err.Error())))
 		return
 	}
 
-	session.Conn.Write([]byte(fmt.Sprintf("257 \"%s\" directory created.\r\n", virtualPath)))
+	session.ControlConn.Write([]byte(fmt.Sprintf("257 \"%s\" directory created.\r\n", virtualPath)))
 }
 
 
@@ -125,12 +125,12 @@ func HandleMKD(session *entities.Session, args []string) {
 // Si se usa una ruta relativa, se elimina desde el directorio virtual actual
 func HandleRMD(session *entities.Session, args []string) {
 	if !session.IsAuthenticated {
-		session.Conn.Write([]byte("530 Not logged in.\r\n"))
+		session.ControlConn.Write([]byte("530 Not logged in.\r\n"))
 		return
 	}
 
 	if len(args) < 1 {
-		session.Conn.Write([]byte("501 Missing directory name.\r\n"))
+		session.ControlConn.Write([]byte("501 Missing directory name.\r\n"))
 		return
 	}
 
@@ -139,9 +139,9 @@ func HandleRMD(session *entities.Session, args []string) {
 	// Delega la eliminiación del directorio al File System Manager
 	virtualPath, err := fsm.RemoveDir(session.CurrentUser.Home, session.VirtualWorkingDir, dirArg)
 	if err != nil {
-		session.Conn.Write([]byte(fmt.Sprintf("550 %s\r\n", err.Error())))
+		session.ControlConn.Write([]byte(fmt.Sprintf("550 %s\r\n", err.Error())))
 		return
 	}
 
-	session.Conn.Write([]byte(fmt.Sprintf("250 Directory \"%s\" removed.\r\n", virtualPath)))
+	session.ControlConn.Write([]byte(fmt.Sprintf("250 Directory \"%s\" removed.\r\n", virtualPath)))
 }

@@ -16,7 +16,7 @@ func HandleClient(conn net.Conn) {
 	session := entities.NewSession(conn)
 
 	// Enviar banner de bienvenida FTP
-	session.Conn.Write([]byte("220 Bienvenido al servidor FTP\r\n"))
+	session.ControlConn.Write([]byte("220 Bienvenido al servidor FTP\r\n"))
 
 	// Delegar al CommandDispatcher
 	command_dispatcher.CommandDispatcher(session)
