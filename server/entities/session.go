@@ -49,10 +49,27 @@ func NewSession(conn net.Conn) *Session {
 	}
 }
 
-// Update actualiza los campos de la sesión
-func (s *Session) Update(currentUser *User, isAuthenticated bool, virtualWorkingDir string, pendingUser string) {
-	s.CurrentUser = currentUser
-	s.IsAuthenticated = isAuthenticated
-	s.VirtualWorkingDir = virtualWorkingDir
-	s.PendingUser = pendingUser
+// RestartSession reinicia todos los campos de la sesión FTP a su estado inicial.
+func (s *Session) RestartSession() {
+
+	// Cerrar conexiones de datos si están activas
+	if s.DataConn != nil {
+		s.DataConn.Close()
+		s.DataConn = nil
+	}
+	if s.PasvListener != nil {
+		s.PasvListener.Close()
+		s.PasvListener = nil
+	}
+
+	// Resetear estado de autenticación y directorio
+	s.CurrentUser = nil
+	s.IsAuthenticated = false
+	s.VirtualWorkingDir = "/"
+	s.PendingUser = ""
+
+	// Resetear estado de conexión de datos
+	s.ActiveHost = ""
+	s.ActivePort = 0
+	s.DataMode = DataNone
 }
