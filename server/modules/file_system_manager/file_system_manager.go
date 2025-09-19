@@ -148,3 +148,28 @@ func RemoveDir(home, currentVirtual, dirArg string) (string, error) {
 
 	return virtualPath, nil
 }
+
+// ListDir devuelve una lista de nombres de archivos y directorios dentro de un directorio virtual.
+// Retorna []string con los nombres, o error si falla.
+func ListDir(home, currentVirtual string) ([]string, error) {
+	// Resolver ruta real
+	realPath := VirtualToReal(home, currentVirtual)
+
+	// Seguridad: validar que esté dentro del home
+	if !IsInsideBase(realPath, home) {
+		return nil, errors.New("Access denied")
+	}
+
+	// Leer contenido
+	entries, err := os.ReadDir(realPath)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+
+	return names, nil
+}
