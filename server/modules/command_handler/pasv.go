@@ -14,33 +14,21 @@ const (
 
 // handlePASV maneja el comando PASV, que establece la conexión pasiva del servidor.
 func HandlePASV(session *entities.Session, cmd entities.Command) {
+
+	var listener net.Listener
+	var port int
+
 	if !RequireAuth(session) {
 		return
 	}
 
-	var listener net.Listener
-	var port int
-	var err error
+	// Cerrar cualquier conexión y listener pasivos previos
+	session.ClosePassiveConnection()
 
-	// Si ya había un listener/conexión previa, cerrarla
-	if session.PasvListener != nil {
-		session.PasvListener.Close()
-		session.PasvListener = nil
-	}
-	if session.DataConn != nil {
-		session.DataConn.Close()
-		session.DataConn = nil
-	}
+	// Crea un listener para escuchar conexiones en un puerto
+	listener, port = StartListener()
 
-	// Buscar puerto disponible en rango
-	for p := PasvPortMin; p <= PasvPortMax; p++ {
-		listener, err = net.Listen("tcp", fmt.Sprintf(":%d", p))
-		if err == nil {
-			port = p
-			break
-		}
-	}
-	if err != nil {
+	if listener == nil {
 		session.ControlConn.Write([]byte("425 Can't open data connection.\r\n"))
 		return
 	}
@@ -49,36 +37,36 @@ func HandlePASV(session *entities.Session, cmd entities.Command) {
 	session.PasvListener = listener
 	session.DataMode = entities.DataPassive
 
-	// Obtener IP del servidor (mejor si se configura externamente)
-	serverAddr := session.ControlConn.LocalAddr().(*net.TCPAddr)
-	ipParts := strings.Split(serverAddr.IP.To4().String(), ".")
+	ipParts, p1, p2 := Get_ip_and_port("127.0.0.1", port)	
 
-	// Calcular p1,p2
-	p1 := port / 256
-	p2 := port % 256
-
-	// Respuesta 227
-	response := fmt.Sprintf("227 Entering Passive Mode (%s,%s,%s,%s,%d,%d).\r\n",
-		ipParts[0], ipParts[1], ipParts[2], ipParts[3], p1, p2)
+	// Enviar respuesta al cliente
+	response := fmt.Sprintf("227 Entering Passive Mode (%s,%s,%s,%s,%d,%d).\r\n", ipParts[0], ipParts[1], ipParts[2], ipParts[3], p1, p2)
 	session.ControlConn.Write([]byte(response))
 
-	// Print de depuración
+	// Debug
 	fmt.Println("=== PASV Debug ===")
 	fmt.Println("Listener:", session.PasvListener.Addr())
 	fmt.Println("DataMode:", session.DataMode)
-
-	// Esperar conexión en goroutine
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Println("Error accepting PASV connection:", err)
-			return
-		}
-
-		session.DataConn = conn
-
-		// Una vez aceptado, cerramos el listener
-		session.PasvListener.Close()
-		session.PasvListener = nil
-	}()
 }
+
+func StartListener() (net.Listener, int) {
+	for p := PasvPortMin; p <= PasvPortMax; p++ {
+		
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		
+		if err == nil {
+			return l, p
+		}
+	}
+	return nil, 0
+}
+
+func Get_ip_and_port(serverIP string, port int) ([]string,int,int) {
+
+	ipParts := strings.Split(serverIP, ".")
+
+	p1 := port / 256
+	p2 := port % 256
+
+	return ipParts, p1, p2
+} 

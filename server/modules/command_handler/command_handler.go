@@ -16,10 +16,12 @@ var commandMap = map[string]HandlerFunc{
     "PWD":  HandlePWD,
     "CWD":  HandleCWD,
 	"CDUP": HandleCDUP,
-    "PORT": HandlePORT,
     "MKD":  HandleMKD,
     "RMD":  HandleRMD,
-    "PASV": HandlePASV,
+	"PASV": HandlePASV,
+	"NLST": HandleNLST,
+	"LIST": HandleNLST,
+	"TYPE": HandleTYPE,
 }
 
 func DispatchCommand(session *entities.Session) {
