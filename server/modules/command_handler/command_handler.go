@@ -1,27 +1,28 @@
 package commandHandler
 
 import (
-    "fmt"
 	"bufio"
 	"dftp-server/entities"
+	"fmt"
 )
 
 type HandlerFunc func(*entities.Session, entities.Command)
 
 var commandMap = map[string]HandlerFunc{
-    "USER": HandleUSER,
-    "PASS": HandlePASS,
-    "QUIT": HandleQUIT,
+	"USER": HandleUSER,
+	"PASS": HandlePASS,
+	"QUIT": HandleQUIT,
 	"REIN": HandleREIN,
-    "PWD":  HandlePWD,
-    "CWD":  HandleCWD,
+	"PWD":  HandlePWD,
+	"CWD":  HandleCWD,
 	"CDUP": HandleCDUP,
-    "MKD":  HandleMKD,
-    "RMD":  HandleRMD,
+	"MKD":  HandleMKD,
+	"RMD":  HandleRMD,
 	"PASV": HandlePASV,
 	"NLST": HandleNLST,
 	"LIST": HandleNLST,
 	"TYPE": HandleTYPE,
+	"NOOP": HandleNOOP,
 }
 
 func DispatchCommand(session *entities.Session) {
@@ -30,7 +31,7 @@ func DispatchCommand(session *entities.Session) {
 	for {
 		// Leer una línea del cliente
 		line, err := reader.ReadString('\n')
-		
+
 		// Manejar errores de lectura
 		if err != nil {
 			fmt.Println("Error al leer comando:", err)
@@ -39,15 +40,15 @@ func DispatchCommand(session *entities.Session) {
 
 		// Parsear el comando
 		cmd := entities.ParseCommand(line)
-		
+
 		// Ejecuta el handler correspondiente, en caso de no existir responde con 502 Comando no implementado
 		if handler, ok := commandMap[cmd.Name]; ok {
-        	handler(session, cmd)
+			handler(session, cmd)
 			// Si el comando es QUIT, salir del loop y terminar la sesión
 			if cmd.Name == "QUIT" {
 				return
 			}
-    	} else {
+		} else {
 			session.ControlConn.Write([]byte("502 Comando no implementado\r\n"))
 		}
 	}
