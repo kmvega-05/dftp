@@ -5,8 +5,9 @@ import (
 )
 
 type Command struct {
-	Name string   
-	Args []string 
+	Name string   // Nombre del comando, en mayusculas
+	Args []string // Argumentos que recibe el comando
+	Text string   // Explicacion de lo que hace el comando
 }
 
 // ParseCommand convierte una línea de texto en un Command estructurado.
