@@ -23,6 +23,7 @@ var commandMap = map[string]HandlerFunc{
 	"LIST": HandleNLST,
 	"TYPE": HandleTYPE,
 	"NOOP": HandleNOOP,
+	"HELP": HandleHELP,
 }
 
 func DispatchCommand(session *entities.Session) {
