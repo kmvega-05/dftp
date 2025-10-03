@@ -1,10 +1,10 @@
 package file_system_manager
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
-	"errors"
 )
 
 // DirExists verifica si el path existe y es un directorio real
@@ -172,4 +172,18 @@ func ListDir(home, currentVirtual string) ([]string, error) {
 	}
 
 	return names, nil
+}
+
+func ReadFileContent(home, filePath string) (string, os.FileInfo, error) {
+	realPath := VirtualToReal(home, filePath)
+	if !IsInsideBase(realPath, home) {
+		return "", nil, errors.New("Access denied")
+	}
+	content, err := os.ReadFile(realPath)
+	if err != nil {
+		return "", nil, err
+	}
+	var fileInfo, _ = os.Stat(realPath)
+
+	return string(content), fileInfo, nil
 }
