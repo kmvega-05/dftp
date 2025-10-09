@@ -1,18 +1,25 @@
 package commandHandler
 
-import "dftp-server/entities"
+import (
+	"fmt"
+	"dftp-server/entities"
+)
 
-// handleUSER guarda el usuario pendiente en la sesión
+// HandleUSER guarda el usuario pendiente en la sesión
 func HandleUSER(session *entities.Session, cmd entities.Command) {
-	
+	// Verificar que se haya pasado al menos un argumento (nombre de usuario)
 	if !RequireArgs(session, cmd, 1) {
 		return
 	}
+
 	username := cmd.Args[0]
 
+	// Reinicia la sesión (cierra conexiones, resetea estado)
 	session.RestartSession()
 
-	// Actualiza el usuario pendiente en la sesión
+	// Guardar el usuario pendiente
 	session.PendingUser = username
-	session.ControlConn.Write([]byte("331 User name okay, need password\r\n"))
+
+	// Responder con código FTP 331
+	session.Reply(331, fmt.Sprintf("User %s okay, need password", username))
 }

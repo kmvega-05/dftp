@@ -94,3 +94,7 @@ func (session *Session) AcceptDataConnection() bool {
 	}
 	return false
 }
+
+func (s *Session) Reply(code int, message string) {
+    fmt.Fprintf(s.ControlConn, "%d %s\r\n", code, message)
+}

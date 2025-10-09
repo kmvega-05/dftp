@@ -149,6 +149,45 @@ func RemoveDir(home, currentVirtual, dirArg string) (string, error) {
 	return virtualPath, nil
 }
 
+// RemoveFile elimina un archivo dentro del home del usuario.
+// Retorna un error si el archivo no existe, no es un archivo regular o está fuera del home.
+func RemoveFile(home, currentVirtual, fileArg string) error {
+	if fileArg == "" {
+		return errors.New("Missing file name")
+	}
+
+	// 1. Resolver ruta virtual y real
+	virtualPath := ResolveVirtualPath(home, currentVirtual, fileArg)
+	realPath := VirtualToReal(home, virtualPath)
+
+	// 2. Seguridad: asegurar que esté dentro del home
+	if !IsInsideBase(realPath, home) {
+		return errors.New("Access denied")
+	}
+
+	// 3. Verificar existencia
+	info, err := os.Stat(realPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.New("No such file or directory")
+		}
+		return err
+	}
+
+	// 4. Validar que sea un archivo regular (no directorio, no dispositivo)
+	if info.IsDir() {
+		return errors.New("Not a regular file")
+	}
+
+	// 5. Eliminar el archivo
+	err = os.Remove(realPath)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // ListDir devuelve una lista de nombres de archivos y directorios dentro de un directorio virtual.
 // Retorna []string con los nombres, o error si falla.
 func ListDir(home, currentVirtual string) ([]string, error) {

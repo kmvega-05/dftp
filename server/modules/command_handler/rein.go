@@ -1,11 +1,12 @@
 package commandHandler
 
-import (
-    "dftp-server/entities"
-)
+import "dftp-server/entities"
 
-// handleREIN reinicia la sesión actual.
+// HandleREIN reinicia la sesión actual.
 func HandleREIN(session *entities.Session, cmd entities.Command) {
+	// Reinicia todos los campos de la sesión
 	session.RestartSession()
-	session.ControlConn.Write([]byte("220 Session reset\r\n"))
+
+	// Responder con código FTP 220 (servicio listo)
+	session.Reply(220, "Session reset")
 }

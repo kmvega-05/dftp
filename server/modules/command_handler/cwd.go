@@ -7,7 +7,7 @@ import (
 
 // HandleCWD maneja el comando CWD, que cambia el directorio de trabajo actual.
 func HandleCWD(session *entities.Session, cmd entities.Command) {
-	
+
 	if !RequireAuth(session) {
 		return
 	}
@@ -18,17 +18,17 @@ func HandleCWD(session *entities.Session, cmd entities.Command) {
 
 	dirArg := cmd.Args[0]
 
-	// Resolver la nueva ruta virtual usando fsm
+	// Resolver la nueva ruta virtual con respecto al directorio actual
 	newVirtual := fsm.ResolveVirtualPath(session.CurrentUser.Home, session.VirtualWorkingDir, dirArg)
 	newReal := fsm.VirtualToReal(session.CurrentUser.Home, newVirtual)
-	
-	// Verificar existencia
+
+	// Verificar que el directorio exista físicamente
 	if !fsm.DirExists(newReal) {
-		session.ControlConn.Write([]byte("550 Directory not found.\r\n"))
+		session.Reply(550, "Directory not found.")
 		return
 	}
 
-	// Actualizar la ruta virtual en la sesión
+	// Actualizar el directorio de trabajo virtual
 	session.VirtualWorkingDir = newVirtual
-	session.ControlConn.Write([]byte("250 Directory successfully changed.\r\n"))
+	session.Reply(250, "Directory successfully changed.")
 }

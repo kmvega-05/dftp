@@ -5,9 +5,9 @@ import (
 	"dftp-server/modules/user_management"
 )
 
-// handlePASS valida el password usando user_management_module
+// HandlePASS valida el password usando el módulo user_management
 func HandlePASS(session *entities.Session, cmd entities.Command) {
-	
+	// Verificar que se pase al menos un argumento (el password)
 	if !RequireArgs(session, cmd, 1) {
 		return
 	}
@@ -16,14 +16,14 @@ func HandlePASS(session *entities.Session, cmd entities.Command) {
 
 	// Debe haberse recibido previamente USER
 	if session.PendingUser == "" {
-		session.ControlConn.Write([]byte("503 Bad sequence of commands\r\n"))
+		session.Reply(503, "Bad sequence of commands")
 		return
 	}
 
 	// Cargar base de usuarios
 	db, err := user_management.LoadUsers("configs/users.json")
 	if err != nil {
-		session.ControlConn.Write([]byte("550 Internal server error\r\n"))
+		session.Reply(550, "Internal server error")
 		return
 	}
 
@@ -31,7 +31,7 @@ func HandlePASS(session *entities.Session, cmd entities.Command) {
 	user, ok := db.ValidateUser(session.PendingUser, password)
 	if !ok {
 		// Falla la autenticación: PendingUser se mantiene
-		session.ControlConn.Write([]byte("530 Not logged in\r\n"))
+		session.Reply(530, "Not logged in")
 		return
 	}
 
@@ -41,5 +41,5 @@ func HandlePASS(session *entities.Session, cmd entities.Command) {
 	session.VirtualWorkingDir = "/"
 	session.PendingUser = "" 
 
-	session.ControlConn.Write([]byte("230 User logged in, proceed\r\n"))
+	session.Reply(230, "User logged in, proceed")
 }
