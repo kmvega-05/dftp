@@ -44,6 +44,8 @@ func DispatchCommand(session *entities.Session) {
 		// Parsear el comando
 		cmd := entities.ParseCommand(line)
 
+		fmt.Printf("Comando recibido: %s %v\n", cmd.Name, cmd.Args)
+
 		// Ejecuta el handler correspondiente, en caso de no existir responde con 502 Comando no implementado
 		if handler, ok := commandMap[cmd.Name]; ok {
 			handler(session, cmd)

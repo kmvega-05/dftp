@@ -16,5 +16,5 @@ func HandleCDUP(session *entities.Session, cmd entities.Command) {
 
 	// Actualizar ruta virtual
 	session.VirtualWorkingDir = parentVirtual
-	session.ControlConn.Write([]byte("200 Operation succesfully executed.\r\n"))
+	session.Reply(250, "Directory successfully changed.")
 }

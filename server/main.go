@@ -1,13 +1,36 @@
 package main
 
-import "log"
-import "dftp-server/modules/connection_listener"
+import (
+	"fmt"
+	"log"
+	"net"
+
+	"dftp-server/modules/connection_manager"
+)
 
 func main() {
 	port := "21"
 
-	// Inicia el listener del servidor
-	if err := connection_listener.Start(port); err != nil {
-		log.Fatalf("No se pudo iniciar el servidor: %v", err)
+	// Abre un socket TCP en el puerto especificado
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		log.Fatalf("Error iniciando listener: %v", err)
+	}
+	defer listener.Close()
+
+	fmt.Println("Servidor escuchando en el puerto", port)
+
+	for {
+		// Espera y acepta una nueva conexión entrante
+		conn, err := listener.Accept()
+		if err != nil {
+			fmt.Println("Error aceptando conexión:", err)
+			continue
+		}
+
+		fmt.Println("Cliente conectado:", conn.RemoteAddr())
+
+		// Cada cliente se atiende en su propia goroutine
+		go connection_manager.HandleClient(conn)
 	}
 }

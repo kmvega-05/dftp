@@ -3,8 +3,10 @@ package commandHandler
 import (
 	"dftp-server/entities"
 	"fmt"
+	"math/rand"
 	"net"
 	"strings"
+	"time"
 )
 
 const (
@@ -12,61 +14,53 @@ const (
 	PasvPortMax = 21000
 )
 
-// handlePASV maneja el comando PASV, que establece la conexión pasiva del servidor.
+// HandlePASV maneja el comando PASV, que establece la conexión pasiva del servidor.
 func HandlePASV(session *entities.Session, cmd entities.Command) {
-
-	var listener net.Listener
-	var port int
-
 	if !RequireAuth(session) {
 		return
 	}
 
-	// Cerrar cualquier conexión y listener pasivos previos
 	session.ClosePassiveConnection()
 
-	// Crea un listener para escuchar conexiones en un puerto
-	listener, port = StartListener()
-
+	listener, port := startListener()
 	if listener == nil {
-		session.ControlConn.Write([]byte("425 Can't open data connection.\r\n"))
+		session.Reply(425, "Can't open data connection.")
 		return
 	}
 
-	// Guardar en sesión
 	session.PasvListener = listener
 	session.DataMode = entities.DataPassive
 
-	ipParts, p1, p2 := Get_ip_and_port("127.0.0.1", port)	
+	ipParts, p1, p2 := getIPAndPort("127.0.0.1", port)
 
-	// Enviar respuesta al cliente
-	response := fmt.Sprintf("227 Entering Passive Mode (%s,%s,%s,%s,%d,%d).\r\n", ipParts[0], ipParts[1], ipParts[2], ipParts[3], p1, p2)
-	session.ControlConn.Write([]byte(response))
+	response := fmt.Sprintf("Entering Passive Mode (%s,%s,%s,%s,%d,%d).",
+		ipParts[0], ipParts[1], ipParts[2], ipParts[3], p1, p2)
+	session.Reply(227, response)
 
-	// Debug
 	fmt.Println("=== PASV Debug ===")
 	fmt.Println("Listener:", session.PasvListener.Addr())
 	fmt.Println("DataMode:", session.DataMode)
 }
 
-func StartListener() (net.Listener, int) {
-	for p := PasvPortMin; p <= PasvPortMax; p++ {
-		
-		l, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
-		
+// startListener intenta abrir un listener TCP en un puerto aleatorio dentro del rango
+func startListener() (net.Listener, int) {
+	rand.Seed(time.Now().UnixNano())
+	maxAttempts := PasvPortMax - PasvPortMin + 1
+
+	for i := 0; i < maxAttempts; i++ {
+		port := rand.Intn(PasvPortMax-PasvPortMin+1) + PasvPortMin
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err == nil {
-			return l, p
+			return l, port
 		}
 	}
 	return nil, 0
 }
 
-func Get_ip_and_port(serverIP string, port int) ([]string,int,int) {
-
+// getIPAndPort descompone la IP y el puerto en los valores requeridos por FTP
+func getIPAndPort(serverIP string, port int) ([]string, int, int) {
 	ipParts := strings.Split(serverIP, ".")
-
 	p1 := port / 256
 	p2 := port % 256
-
 	return ipParts, p1, p2
-} 
+}
