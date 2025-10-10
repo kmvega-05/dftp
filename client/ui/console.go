@@ -62,7 +62,7 @@ func (c *ConsoleUI) handleCommand(cmd string) {
 	if strings.ToLower(cmd) == "quit" {
 		c.printNormal("> quit")
 		c.printNormal("Cerrando conexión...")
-		_ = c.client.Close()
+		c.client.Close()
 		// cerrar la app
 		c.win.Close()
 		fyne.CurrentApp().Quit()
@@ -71,16 +71,30 @@ func (c *ConsoleUI) handleCommand(cmd string) {
 
 	// Enviar al servidor y mostrar respuesta
 	c.printNormal("> " + cmd)
-	resp, err := c.client.SendCommand(cmd)
-	if err != nil {
-		c.printError(fmt.Sprintf("Error enviando comando: %v", err))
-		return
+	if cmd == "NLST" || cmd == "LIST" {
+		resp, err := c.client.List()
+		if err != nil {
+			c.printError(fmt.Sprintf("Error enviando comando: %v", err))
+			return
+		}
+		c.printSuccess(strings.TrimRight(resp, "\r\n"))
+	} else {
+
+		err := c.client.SendCommand(cmd)
+		if err != nil {
+			c.printError(fmt.Sprintf("Error enviando comando: %v", err))
+			return
+		}
+		resp, err := c.client.ReadResponse()
+		if err != nil {
+			c.printError(fmt.Sprintf("Error recibiendo la respuesta: %v", err))
+		}
+		if resp[0] == '5' || resp[0] == '4' {
+			c.printError(fmt.Sprintf("%s", strings.TrimRight(resp, "\r\n")))
+			return
+		}
+		c.printSuccess(strings.TrimRight(resp, "\r\n"))
 	}
-	if resp[0] == '5' || resp[0] == '4' {
-		c.printError(fmt.Sprintf("%s", strings.TrimRight(resp, "\r\n")))
-		return
-	}
-	c.printSuccess(strings.TrimRight(resp, "\r\n"))
 }
 
 // Métodos para imprimir en color
