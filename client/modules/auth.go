@@ -1,13 +1,27 @@
 package modules
 
+import "fmt"
+
 func (c *Client) Login(user, pass string) (string, string, error) {
-	respUser, err := c.SendCommand("USER " + user)
-	if err != nil {
-		return respUser, "", err
+	// Enviar USER
+	if err := c.SendCommand("USER " + user); err != nil {
+		return "", "", err
 	}
-	respPass, err := c.SendCommand("PASS " + pass)
+	responseUser, err := c.ReadResponse()
 	if err != nil {
-		return respUser, respPass, err
+		return "", "", err
 	}
-	return respUser, respPass, nil
+	fmt.Println("Server:", responseUser)
+
+	// Enviar PASS
+	if err := c.SendCommand("PASS " + pass); err != nil {
+		return "", "", err
+	}
+	responsePass, err := c.ReadResponse()
+	if err != nil {
+		return "", "", err
+	}
+	fmt.Println("Server:", responsePass)
+
+	return responseUser, responsePass, nil
 }
