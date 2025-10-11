@@ -1,6 +1,6 @@
-from client.core.connection import ControlConnectionManager
-from client.core.data_connection import DataConnectionManager
-from client.core.parser import Parser, MessageStructure
+from core.connection import ControlConnectionManager
+from core.data_connection import DataConnectionManager
+from core.parser import Parser, MessageStructure
 import os
 from datetime import datetime
 

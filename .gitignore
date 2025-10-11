@@ -1,2 +1,169 @@
+# ============================================
+# PYTHON
+# ============================================
+
+# Archivos compilados y cachés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Archivos Cython
+*.c
+*.so
+*.pyd
+
+# Entornos virtuales
 venv/
-.pyc
+env/
+.venv/
+ENV/
+env.bak/
+
+# Dependencias y paquetes
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+develop-eggs/
+downloads/
+lib/
+lib64/
+parts/
+sdist/
+var/
+
+# ============================================
+# STREAMLIT
+# ============================================
+
+# Configuración y caché local
+.streamlit/
+# (Opcional) Evita subir el historial y credenciales locales
+~/.streamlit/
+
+# ============================================
+# TESTS Y COBERTURA
+# ============================================
+
+.tox/
+.nox/
+.cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.mypy_cache/
+ruff_cache/
+
+# ============================================
+# LOGS Y TEMPORALES
+# ============================================
+
+*.log
+logs/
+log/
+tmp/
+temp/
+*.tmp
+*.bak
+
+# ============================================
+# CONFIGURACIONES Y SECRETOS
+# ============================================
+
+# Variables de entorno y configuraciones locales
+.env
+.env.*
+*.env
+*.ini
+*.cfg
+*.json
+*.yaml
+*.yml
+secrets/
+credentials/
+
+# Bases de datos locales
+*.sqlite3
+*.db
+*.db-journal
+
+# ============================================
+# DOCKER Y SWARM
+# ============================================
+
+# Archivos de configuración y build temporales
+Dockerfile.*
+Dockerfile.local
+docker-compose.override.yml
+docker-compose.local.yml
+docker-compose.debug.yml
+
+# Carpetas o archivos generados por contenedores
+docker-data/
+docker-cache/
+.docker/
+.dockerignore
+*.pid
+*.sock
+*.log
+
+# Evitar subir imágenes o volúmenes locales
+volumes/
+data/
+backup/
+cache/
+
+# ============================================
+# DOCUMENTACIÓN Y BUILD
+# ============================================
+
+# Sphinx / MkDocs / pdoc
+docs/_build/
+site/
+
+# ============================================
+# EDITORES Y SISTEMAS
+# ============================================
+
+# VS Code
+.vscode/
+.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+
+# Emacs / Vim / Sublime
+*~
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ============================================
+# OTROS
+# ============================================
+
+# Archivos de profiling o benchmarks
+prof/
+.prof
+
+# Archivos de Jupyter si se usan para exploración
+.ipynb_checkpoints
+*.ipynb
