@@ -1,0 +1,14 @@
+{
+  "users": [
+    {
+      "username": "test",
+      "password": "$2b$12$eayG68CX676/vfjAQk7Hw.P3swg2tQNF0WJNtUKps8AGmy9JUEMe6",
+      "home_directory": "/home/test"
+    },
+    {
+      "username": "admin",
+      "password": "$2b$12$EXrT4f5IGnSRXjpZxUK6aOQHHF5wB/4towLpEo4CP7logFaTrQbwe",
+      "home_directory": "/home/admin"
+    }
+  ]
+}
