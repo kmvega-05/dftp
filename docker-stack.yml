@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  ftp_server:
+    image: dftp-server:latest
+    networks:
+      - ftp_net
+    deploy:
+      replicas: 1
+    ports:
+      - "21:21"
+      - "20:20"
+      - "50000-50010:50000-50010"
+    volumes:
+      - ./server/data:/app/data
+    tty: true
+
+  ftp_client:
+    image: dftp-client:latest
+    networks:
+      - ftp_net
+    deploy:
+      replicas: 1
+    ports:
+      - "8501:8501"
+    depends_on:
+      - ftp_server
+    tty: true
+
+networks:
+  ftp_net:
+    external: true

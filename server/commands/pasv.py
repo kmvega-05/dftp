@@ -16,7 +16,7 @@ def handle_pasv(command, client_socket, server, client_session):
         data_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         
         # Enlazar a un puerto aleatorio (rango 30000-50000)
-        data_port = random.randint(30000, 50000)
+        data_port = random.randint(50000, 50010)
         data_socket.bind(('0.0.0.0', data_port))
         data_socket.listen(1)
         
@@ -25,8 +25,13 @@ def handle_pasv(command, client_socket, server, client_session):
         client_session.data_port = data_port
         client_session.pasv_mode = True
         
-        # Obtener IP local (simplificado - normalmente la IP del servidor)
-        ip_parts = ['127', '0', '0', '1']
+        # Usar el nombre del servicio como host
+        pasv_host = 'ftp_server'  # nombre del servicio en Docker Swarm
+
+        # Resolver IP interna del servicio (overlay network)
+        pasv_ip = socket.gethostbyname(pasv_host)
+        ip_parts = pasv_ip.split('.')  
+
         port_high = data_port // 256
         port_low = data_port % 256
         
