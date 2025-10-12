@@ -46,7 +46,7 @@ st.title("dFTP — Streamlit Client")
 
 with st.sidebar:
     st.header("Connection")
-    host = st.text_input("Host", value="127.0.0.1")
+    host = st.text_input("Host", value="0.0.0.0")
     port = st.number_input("Port", min_value=1, max_value=65535, value=2121)
     timeout = st.number_input("Timeout (s)", min_value=1.0, max_value=60.0, value=10.0)
     if st.button("Connect"):

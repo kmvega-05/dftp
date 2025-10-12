@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 21 20 50000-50010
 
-CMD ["python", "main.py"]
+CMD ["python", "-u", "main.py"]

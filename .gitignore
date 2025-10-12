@@ -85,7 +85,6 @@ temp/
 *.cfg
 *.json
 *.yaml
-*.yml
 secrets/
 credentials/
 
