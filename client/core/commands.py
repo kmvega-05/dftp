@@ -11,6 +11,30 @@ class ClientCommandHandler:
         self.data_addr = None
         # history as list of dicts: {"time":..., "command":..., "response":..., "error":bool}
         self.history = []
+
+    def read_banner(self):
+        """Read and record the initial banner/welcome message from the server.
+
+        This should be called right after establishing the control connection so the
+        UI can show the welcome message immediately (fixes bug #1).
+        """
+        try:
+            response = self.conn.receive_response()
+            if response:
+                parsed = self.parser.parse_data(response)
+                self.history.append({
+                    "time": datetime.utcnow(),
+                    "command": "BANNER",
+                    "raw": response,
+                    "parsed": parsed,
+                    "error": parsed.type in ("error", "unknown")
+                })
+                return parsed
+        except Exception:
+            # Don't raise: banner is optional for some servers or may already have been
+            # consumed; return None to the caller.
+            return None
+        return None
     
     # Comandos estandar, que no requieren conexion de datos
     def _execute(self, command: str) -> MessageStructure:
@@ -83,22 +107,34 @@ class ClientCommandHandler:
 
     def _list(self, path: str = ""):
         pasv_response = self._pasv()
+        # Store PASV response in history entry later; if PASV failed, return it
         if not pasv_response.code.startswith('2'):
             return None, pasv_response
         ip, port = self.data_addr
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
         command = f"LIST {path}".strip()
+        # Send the LIST command and expect a preliminary 1xx reply before data
         self.conn.send_command(command)
+        # read the preliminary response (usually 1xx) prior to receiving data
+        prelim_resp = self.conn.receive_response()
+        prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
         listing = data_conn.receive_list()
         data_conn.close()
+        # after data transfer, read final response (2xx/4xx/5xx)
         response = self.conn.receive_response()
         parsed = self.parser.parse_data(response)
         self.history.append({
             "time": datetime.utcnow(),
             "command": f"LIST {path}".strip(),
-            "raw": response,
+            # store both prelim and final raw responses when available
+            "raw": {
+                "pasv": pasv_response.raw if hasattr(pasv_response, 'raw') else str(pasv_response.message) if pasv_response else None,
+                "prelim": prelim_resp if prelim_resp else None,
+                "final": response
+            },
             "parsed": parsed,
+            "prelim": prelim_parsed,
             "data": listing,
             "error": parsed.type in ("error", "unknown")
         })
@@ -113,6 +149,8 @@ class ClientCommandHandler:
         data_conn.connect()
         command = f"NLST {path}".strip()
         self.conn.send_command(command)
+        prelim_resp = self.conn.receive_response()
+        prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
         listing = data_conn.receive_list()
         data_conn.close()
         response = self.conn.receive_response()
@@ -120,8 +158,13 @@ class ClientCommandHandler:
         self.history.append({
             "time": datetime.utcnow(),
             "command": f"NLST {path}".strip(),
-            "raw": response,
+            "raw": {
+                "pasv": pasv_response.raw if hasattr(pasv_response, 'raw') else str(pasv_response.message) if pasv_response else None,
+                "prelim": prelim_resp if prelim_resp else None,
+                "final": response
+            },
             "parsed": parsed,
+            "prelim": prelim_parsed,
             "data": listing,
             "error": parsed.type in ("error", "unknown")
         })
@@ -139,6 +182,8 @@ class ClientCommandHandler:
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
         self.conn.send_command(f"RETR {remote_filename}")
+        prelim_resp = self.conn.receive_response()
+        prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
         data_conn.receive_file(local_path)
         data_conn.close()
         response = self.conn.receive_response()
@@ -146,8 +191,13 @@ class ClientCommandHandler:
         self.history.append({
             "time": datetime.utcnow(),
             "command": f"RETR {remote_filename}",
-            "raw": response,
+            "raw": {
+                "pasv": pasv_response.raw if hasattr(pasv_response, 'raw') else str(pasv_response.message) if pasv_response else None,
+                "prelim": prelim_resp if prelim_resp else None,
+                "final": response
+            },
             "parsed": parsed,
+            "prelim": prelim_parsed,
             "file": local_path,
             "error": parsed.type in ("error", "unknown")
         })
@@ -167,6 +217,8 @@ class ClientCommandHandler:
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
         self.conn.send_command(f"STOR {remote_filename}")
+        prelim_resp = self.conn.receive_response()
+        prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
         data_conn.send_file(local_path)
         data_conn.close()
         response = self.conn.receive_response()
@@ -174,8 +226,13 @@ class ClientCommandHandler:
         self.history.append({
             "time": datetime.utcnow(),
             "command": f"STOR {remote_filename}",
-            "raw": response,
+            "raw": {
+                "pasv": pasv_response.raw if hasattr(pasv_response, 'raw') else str(pasv_response.message) if pasv_response else None,
+                "prelim": prelim_resp if prelim_resp else None,
+                "final": response
+            },
             "parsed": parsed,
+            "prelim": prelim_parsed,
             "file": local_path,
             "error": parsed.type in ("error", "unknown")
         })

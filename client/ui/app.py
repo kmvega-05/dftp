@@ -15,6 +15,7 @@ import traceback
 from core.connection import ControlConnectionManager
 from core.parser import Parser
 from core.commands import ClientCommandHandler
+from levenstein import get_suggestion
 
 import streamlit as st
 
@@ -56,6 +57,14 @@ with st.sidebar:
             st.session_state["conn"] = conn
             handler = ClientCommandHandler(conn, Parser())
             st.session_state["handler"] = handler
+            # Read and record the server banner (welcome message) immediately
+            try:
+                banner = handler.read_banner()
+                if banner:
+                    st.info(f"{banner.code} — {banner.message}")
+            except Exception:
+                # ignore banner read errors
+                pass
             # record successful connect in history
             handler.history.append({
                 "time": datetime.utcnow(),
@@ -145,7 +154,24 @@ with col1:
                             st.error(f"Error: {result['error']}")
                         else:
                             out = result["value"]
-                            st.success(f"STOR finished: {out}")
+                            # Expecting (remote_filename, parsed)
+                            if isinstance(out, tuple) and len(out) == 2:
+                                filename, parsed = out
+                                # show preliminary message if available in history
+                                last = handler.get_history()[-1] if handler.get_history() else None
+                                if last and last.get("prelim"):
+                                    p = last.get("prelim")
+                                    st.info(f"{p.code} - {p.message}")
+                                # show final parsed message (2xx or error)
+                                if hasattr(parsed, "code"):
+                                    if parsed.type in ("error", "unknown"):
+                                        st.error(f"{parsed.code} - {parsed.message}")
+                                    else:
+                                        st.success(f"{parsed.code} - {parsed.message}")
+                                else:
+                                    st.success(f"STOR finished: {filename}")
+                            else:
+                                st.success(f"STOR finished: {out}")
                 elif verb == "retr":
                     if len(parts) < 2:
                         st.error("Usage: RETR remote_filename [local_path]")
@@ -164,7 +190,23 @@ with col1:
                             st.error(f"Error: {result['error']}")
                         else:
                             out = result["value"]
-                            st.success(f"RETR finished: {out}")
+                            # Expecting (local_path, parsed)
+                            if isinstance(out, tuple) and len(out) == 2:
+                                local_path, parsed = out
+                                last = handler.get_history()[-1] if handler.get_history() else None
+                                if last and last.get("prelim"):
+                                    p = last.get("prelim")
+                                    st.info(f"{p.code} - {p.message}")
+                                # show final parsed message
+                                if hasattr(parsed, "code"):
+                                    if parsed.type in ("error", "unknown"):
+                                        st.error(f"{parsed.code} - {parsed.message}")
+                                    else:
+                                        st.success(f"{parsed.code} - {parsed.message}")
+                                else:
+                                    st.success(f"RETR finished: {local_path}")
+                            else:
+                                st.success(f"RETR finished: {out}")
                 elif verb in ("list", "nlst"):
                     if verb == "list":
                         t, result = run_in_thread(handler._list, "")
@@ -178,9 +220,20 @@ with col1:
                     else:
                         val = result["value"]
                         # When handler._list returns (listing, parsed)
-                        if isinstance(val, tuple):
+                        if isinstance(val, tuple) and len(val) == 2:
                             listing, parsed = val
+                            # show preliminary 1xx message if present in the last history entry
+                            last = handler.get_history()[-1] if handler.get_history() else None
+                            if last and last.get("prelim"):
+                                p = last.get("prelim")
+                                st.info(f"{p.code} - {p.message}")
                             st.text_area("Listing", value=listing)
+                            # show final parsed message (2xx or error)
+                            if hasattr(parsed, "code"):
+                                if parsed.type in ("error", "unknown"):
+                                    st.error(f"{parsed.code} - {parsed.message}")
+                                else:
+                                    st.success(f"{parsed.code} - {parsed.message}")
                         else:
                             st.write(val)
                 else:
@@ -190,6 +243,7 @@ with col1:
                     method = getattr(handler, method_name, None)
                     if method is None:
                         st.error(f"Unknown command: {verb}")
+                        st.write(f"Try with {get_suggestion(verb)}")
                     else:
                         args = parts[1:]
                         t, result = run_in_thread(method, *args)
