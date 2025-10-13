@@ -6,11 +6,12 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
 
 # Archivos Cython
 *.c
 *.so
-*.pyd
 
 # Entornos virtuales
 venv/
@@ -39,7 +40,7 @@ var/
 
 # Configuración y caché local
 .streamlit/
-# (Opcional) Evita subir el historial y credenciales locales
+# (Opcional) Evita subir historial y credenciales locales
 ~/.streamlit/
 
 # ============================================
@@ -72,6 +73,8 @@ tmp/
 temp/
 *.tmp
 *.bak
+*.swp
+*.swo
 
 # ============================================
 # CONFIGURACIONES Y SECRETOS
@@ -108,7 +111,6 @@ docker-compose.debug.yml
 docker-data/
 docker-cache/
 .docker/
-.dockerignore
 *.pid
 *.sock
 *.log
@@ -133,15 +135,13 @@ site/
 
 # VS Code
 .vscode/
-.code-workspace
+*.code-workspace
 
 # PyCharm / IntelliJ
 .idea/
 
 # Emacs / Vim / Sublime
 *~
-*.swp
-*.swo
 *.sublime-project
 *.sublime-workspace
 
@@ -163,6 +163,15 @@ Desktop.ini
 prof/
 .prof
 
-# Archivos de Jupyter si se usan para exploración
+# Archivos de Jupyter
 .ipynb_checkpoints
 *.ipynb
+
+# ============================================
+# CONTROL FINAL
+# ============================================
+
+# Evita incluir bytecode o cachés residuales
+**/__pycache__/
+**/*.pyc
+**/*.pyo
