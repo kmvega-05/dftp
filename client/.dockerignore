@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+*.swp
+*.swo
+*.bak
+*.tmp
+*.egg-info/
+.env
+.DS_Store
+.vscode/
+.idea/
+README.md
+ui/README.md
+
+# Streamlit caches
+.streamlit/
+.cache/
+.streamlit-cache/
