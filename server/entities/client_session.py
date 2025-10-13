@@ -1,5 +1,5 @@
 class ClientSession:
-    def __init__(self, client_address):
+    def __init__(self, client_address=None):
         self.client_address = client_address
         self.username = None
         self.authenticated = False 
@@ -10,9 +10,10 @@ class ClientSession:
         self.rename_from_path = None 
     
     def set_username(self, username):
-        """Establece el nombre de usuario"""
+        """Establece el nombre de usuario y limpia el estado de la sesión"""
+        # Reiniciar la sesión manteniendo client_address
+        self.reset_session()
         self.username = username
-        self.authenticated = False  # Reset auth al cambiar usuario
         print(f"Username set to: {username}")
     
     def authenticate(self):
@@ -40,12 +41,17 @@ class ClientSession:
         """Limpia el estado de renombrar"""
         self.rename_from_path = None
     
-    def reset_session(self):
+    def reset_session(self, client_address=None):
         """Reinicializa toda la sesión (comando REIN)"""
-        self.username = None
-        self.authenticated = False
-        self.current_directory = "/"
-        self.cleanup_pasv()  # Limpiar también conexiones de datos
+        # Limpiar conexiones de datos antes del reinicio
+        self.cleanup_pasv()
+        
+        # Determinar qué client_address usar
+        address_to_use = client_address if client_address is not None else self.client_address
+        
+        # Reinicializar todos los atributos usando __init__
+        self.__init__(client_address=address_to_use)
+        
         print(f"Session reset for {self.client_address}")
     
     def cleanup_pasv(self):

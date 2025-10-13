@@ -1,11 +1,14 @@
+import shlex
+
 class Command:
     def __init__(self, raw_command):
         self.raw_command = raw_command.strip()
         self.parse_command()
     
     def parse_command(self):
-        """Parsea el comando raw en nombre y argumentos"""
-        parts = self.raw_command.split()
+        """Parsea el comando raw en nombre y argumentos, respetando comillas"""
+        # Usar shlex para respetar comillas y espacios en argumentos
+        parts = shlex.split(self.raw_command)
         if parts:
             self.name = parts[0].upper()  # Comando siempre en mayúsculas
             self.args = parts[1:] if len(parts) > 1 else []
@@ -24,9 +27,13 @@ class Command:
         """Devuelve los argumentos del comando"""
         return self.args
     
+    def arg_count(self):
+        """Devuelve la cantidad de argumentos"""
+        return len(self.args)
+    
     def require_args(self, count):
         """Verifica si el comando tiene exactamente 'count' argumentos"""
-        return len(self.args) == count
+        return self.arg_count() == count
     
     def get_arg(self, index, default=None):
         """Devuelve un argumento específico por índice"""
