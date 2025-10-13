@@ -6,10 +6,13 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /home/app
 
-# Copy requirements and project files to /home/app
-COPY . /home/app
-RUN pip install --upgrade pip && \
-    if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+
+RUN pip install -r requirements.txt
+
+# Copy the rest of the application code
+COPY . .
 
 # Expose Streamlit default port
 EXPOSE 8501

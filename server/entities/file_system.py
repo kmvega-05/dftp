@@ -5,6 +5,10 @@ import posixpath
 # Configuración
 BASE_DIRECTORY = "/tmp/ftp_root"
 
+class SecurityError(Exception):
+    """Excepción para errores de seguridad"""
+    pass
+
 def ensure_base_directory():
     """Asegura que el directorio base exista"""
     if not os.path.exists(BASE_DIRECTORY):
@@ -382,6 +386,3 @@ def get_file_status(user_directory, file_path):
         print(f"Error getting file status: {e}")
         return None, "Failed to get file status"
 
-class SecurityError(Exception):
-    """Excepción para errores de seguridad"""
-    pass
