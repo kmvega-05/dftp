@@ -1,9 +1,11 @@
+from file_system_manager import get_user_root_directory
 class ClientSession:
     def __init__(self, client_address=None):
         self.client_address = client_address
         self.username = None
         self.authenticated = False 
         self.current_directory = "/"
+        self.root_directory = None
         self.data_socket = None           # Socket de datos
         self.data_port = None             # Puerto para conexión de datos
         self.pasv_mode = False            # Modo PASV activo
@@ -19,6 +21,7 @@ class ClientSession:
     def authenticate(self):
         """Marca el usuario como autenticado"""
         self.authenticated = True
+        self.root_directory = get_user_root_directory(self.username)
         print(f"User {self.username} authenticated successfully")
     
     def is_authenticated(self):
