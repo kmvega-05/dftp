@@ -1,6 +1,8 @@
 import os
 import time
 import posixpath
+import uuid
+
 
 BASE_DIRECTORY = "/tmp/ftp_root"
 
@@ -18,9 +20,6 @@ def ensure_base_directory():
         os.makedirs(BASE_DIRECTORY)
         print(f"Created base directory: {BASE_DIRECTORY}")
 
-# =============================================================================
-# PATH RESOLUTION
-# =============================================================================
 def get_user_root_directory(username):
     """Obtiene el directorio raíz personal de un usuario"""
     user_dir = os.path.join(BASE_DIRECTORY, username)
@@ -28,42 +27,53 @@ def get_user_root_directory(username):
         os.makedirs(user_dir)
     return user_dir
 
+# =============================================================================
+# PATH RESOLUTION
+# =============================================================================
+
 def secure_path_resolution(user_root_directory, user_current_directory, requested_path):
     """
     Resuelve y valida una ruta de forma segura.
-
-    Args:
-        user_root_directory: Directorio raíz del usuario
-        user_current_directory: Directorio actual del usuario (relativo al root)
-        requested_path: Ruta solicitada por el cliente FTP
     
     Returns:
-        str: Ruta del sistema de archivos resuelta normalizada y validando que se encuentre dentro del directorio
-            root del usuario.
+        str: Ruta real del filesystem validada
     """
-    resolved = resolve_path(user_root_directory, user_current_directory, requested_path)
-    return validate_path_within_root(user_root_directory, resolved)
-
-def resolve_path(user_root_directory, user_current_directory, requested_path):
-    """
-    Resuelve una ruta FTP a una ruta del sistema de archivos.
+    # 1. Resolver la ruta virtual (lo que el usuario ve)
+    virtual_path = resolve_ftp_path(user_current_directory, requested_path)
     
-    Args:
-        user_root_directory: Directorio raíz del usuario
-        user_current_directory: Directorio actual del usuario (relativo al root)
-        requested_path: Ruta solicitada por el cliente FTP
+    # 2. Convertir a ruta real
+    real_path = get_real_filesystem_path(user_root_directory, virtual_path)
+    
+    # 3. Validar seguridad
+    return validate_path_within_root(user_root_directory, real_path)
+
+def resolve_ftp_path(user_current_directory, requested_path):
+    """
+    Resuelve una ruta FTP a una ruta virtual del usuario.
+    No incluye el filesystem real.
     
     Returns:
-        str: Ruta del sistema de archivos resuelta
+        str: Ruta virtual resuelta (ej: '/folder' o '/current/folder')
     """
     if requested_path.startswith('/'):
-        # Path absoluto: relativo al root del usuario
-        return os.path.join(user_root_directory, requested_path.lstrip('/'))
+        # Path absoluto: relativo al root virtual del usuario
+        return posixpath.normpath(requested_path)
     else:
-        # Path relativo: relativo al directorio actual del usuario
-        current_full_path = os.path.join(user_root_directory, user_current_directory.lstrip('/'))
-        return os.path.join(current_full_path, requested_path)
+        # Path relativo: relativo al directorio actual virtual
+        return posixpath.normpath(posixpath.join(user_current_directory, requested_path))
+
+def get_real_filesystem_path(user_root_directory, virtual_path):
+    """
+    Convierte una ruta virtual a una ruta real del filesystem.
     
+    Returns:
+        str: Ruta real del filesystem
+    """
+    # Eliminar el '/' inicial y unir con el root del usuario
+    clean_path = virtual_path.lstrip('/')
+    real_path = os.path.join(user_root_directory, clean_path)
+    return os.path.normpath(real_path)
+
 def validate_path_within_root(user_root_directory, resolved_path):
     """
     Valida que una ruta esté dentro del directorio raíz del usuario.
@@ -119,10 +129,7 @@ def file_exists(user_root_directory, user_current_directory, path):
 def get_file_info(user_root_directory, user_current_directory, path):
     """
     Obtiene información completa de un archivo/directorio.
-    
-    Returns:
-        dict con keys: name, type, size, permissions, modified, accessed
-        o None si no existe
+    Retorna rutas virtuales.
     """
     try:
         full_path = secure_path_resolution(user_root_directory, user_current_directory, path)
@@ -131,7 +138,10 @@ def get_file_info(user_root_directory, user_current_directory, path):
             return None
         
         stat = os.stat(full_path)
-        name = os.path.basename(full_path)
+        
+        # Obtener ruta virtual (lo que el usuario ve)
+        virtual_path = resolve_ftp_path(user_current_directory, path)
+        name = os.path.basename(virtual_path)
         
         # Determinar tipo
         if os.path.isdir(full_path):
@@ -143,12 +153,12 @@ def get_file_info(user_root_directory, user_current_directory, path):
         
         return {
             'name': name,
+            'virtual_path': virtual_path,
             'type': file_type,
             'size': stat.st_size,
             'permissions': stat.st_mode,
             'modified': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
             'accessed': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_atime)),
-            'full_path': full_path
         }
         
     except (SecurityError, OSError):
@@ -157,9 +167,7 @@ def get_file_info(user_root_directory, user_current_directory, path):
 def list_directory_detailed(user_root_directory, user_current_directory, path="."):
     """
     Lista contenido con información completa (para LIST).
-    
-    Returns:
-        List[dict] con información de cada elemento del directorio
+    Retorna rutas virtuales.
     """
     try:
         full_path = secure_path_resolution(user_root_directory, user_current_directory, path)
@@ -169,8 +177,11 @@ def list_directory_detailed(user_root_directory, user_current_directory, path=".
         
         entries = []
         for entry_name in os.listdir(full_path):
-            entry_path = os.path.join(path, entry_name)
-            file_info = get_file_info(user_root_directory, user_current_directory, entry_path)
+            # Para cada archivo en el filesystem real, crear su ruta virtual
+            virtual_entry_path = resolve_ftp_path(user_current_directory, 
+                                                posixpath.join(path, entry_name))
+            file_info = get_file_info(user_root_directory, user_current_directory, 
+                                    virtual_entry_path)
             if file_info:
                 entries.append(file_info)
         
@@ -196,3 +207,234 @@ def list_directory_names(user_root_directory, user_current_directory, path="."):
         
     except (SecurityError, OSError):
         return []
+    
+# ==============================================================================================
+# FILE AND DIRECTORY OPERATIONS
+# ==============================================================================================
+
+def change_directory(user_root_directory, user_current_directory, new_path):
+    """Cambia el directorio actual"""
+    try:
+        full_path = secure_path_resolution(user_root_directory, user_current_directory, new_path)
+        
+        if os.path.isdir(full_path):
+            # Resolver la nueva ruta virtual (lo que el usuario debe ver)
+            virtual_path = resolve_ftp_path(user_current_directory, new_path)
+            return virtual_path
+        return None
+        
+    except SecurityError:
+        return None
+    except Exception as e:
+        print(f"Error changing directory: {e}")
+        return None
+
+def create_directory(user_root_directory, user_current_directory, new_dir_path):
+    """Crea un nuevo directorio de forma segura"""
+    try:
+        full_path = secure_path_resolution(user_root_directory, user_current_directory, new_dir_path)
+        
+        # Verificar si el directorio ya existe
+        if os.path.exists(full_path):
+            return False, "Directory already exists"
+        
+        # Crear el directorio
+        os.makedirs(full_path)
+        return True, f'"{new_dir_path}" directory created'
+        
+    except SecurityError:
+        return False, "Path traversal attempt detected"
+    except Exception as e:
+        print(f"Error creating directory: {e}")
+        return False, "Failed to create directory"
+
+def remove_directory(user_root_directory, user_current_directory, dir_path):
+    """Elimina un directorio de forma segura"""
+    try:
+        full_path = secure_path_resolution(user_root_directory, user_current_directory, dir_path)
+        
+        # Verificar si el directorio existe
+        if not os.path.exists(full_path):
+            return False, "Directory does not exist"
+        
+        # Verificar que es un directorio
+        if not os.path.isdir(full_path):
+            return False, "Not a directory"
+        
+        # Verificar que el directorio esté vacío
+        if len(os.listdir(full_path)) > 0:
+            return False, "Directory not empty"
+        
+        # Eliminar el directorio
+        os.rmdir(full_path)
+        return True, f'"{dir_path}" directory removed"'
+        
+    except SecurityError:
+        return False, "Path traversal attempt detected"
+    except Exception as e:
+        print(f"Error removing directory: {e}")
+        return False, "Failed to remove directory"
+
+def delete_file(user_root_directory, user_current_directory, file_path):
+    """Elimina un archivo de forma segura"""
+    try:
+        full_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        
+        # Verificar si el archivo existe
+        if not os.path.exists(full_path):
+            return False, "File not found"
+        
+        # Verificar que es un archivo (no un directorio)
+        if not os.path.isfile(full_path):
+            return False, "Not a file"
+        
+        # Eliminar el archivo
+        os.remove(full_path)
+        return True, f'"{file_path}" file deleted'
+        
+    except SecurityError:
+        return False, "Path traversal attempt detected"
+    except Exception as e:
+        print(f"Error deleting file: {e}")
+        return False, "Failed to delete file"
+
+def rename_path(user_root_directory, user_current_directory, old_path, new_path):
+    """Renombra un archivo o directorio de forma segura"""
+    try:
+        old_full_path = secure_path_resolution(user_root_directory, user_current_directory, old_path)
+        new_full_path = secure_path_resolution(user_root_directory, user_current_directory, new_path)
+        
+        # Verificar que el origen existe
+        if not os.path.exists(old_full_path):
+            return False, "Source path not found"
+        
+        # Verificar que el destino no existe
+        if os.path.exists(new_full_path):
+            return False, "Destination path already exists"
+        
+        # Renombrar
+        os.rename(old_full_path, new_full_path)
+        return True, f'"{old_path}" renamed to "{new_path}"'
+        
+    except SecurityError:
+        return False, "Path traversal attempt detected"
+    except Exception as e:
+        print(f"Error renaming path: {e}")
+        return False, "Failed to rename"
+    
+def generate_unique_filename(user_root_directory, user_current_directory, original_filename):
+    """Genera un nombre único para un archivo"""
+    try:
+        # Extraer extensión si existe
+        name, ext = os.path.splitext(original_filename)
+        
+        # Generar nombre único
+        unique_name = f"{name}_{uuid.uuid4().hex[:8]}{ext}"
+        
+        # Verificar que no exista (poco probable pero bueno)
+        full_path = secure_path_resolution(user_root_directory, user_current_directory, unique_name)
+        counter = 1
+        while os.path.exists(full_path):
+            unique_name = f"{name}_{uuid.uuid4().hex[:8]}_{counter}{ext}"
+            full_path = secure_path_resolution(user_root_directory, user_current_directory, unique_name)
+            counter += 1
+        
+        return unique_name
+        
+    except Exception as e:
+        print(f"Error generating unique filename: {e}")
+        return f"file_{uuid.uuid4().hex[:8]}" 
+
+def store_file_optimized(user_root_directory, user_current_directory, file_path, data_conn, max_buffer_size=10485760):  # 10MB
+    """Almacena archivo usando buffer pequeño o stream según tamaño"""
+    try:
+        full_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        
+        # Crear directorio padre
+        parent_dir = os.path.dirname(full_path)
+        if not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+        
+        # Buffer para los primeros bytes (para decidir el enfoque)
+        initial_buffer = b""
+        total_received = 0
+        use_stream = False
+        
+        with open(full_path, 'wb') as f:
+            data_conn.settimeout(30.0)
+            
+            while True:
+                chunk = data_conn.recv(65536)  # 64KB chunks
+                if not chunk:
+                    break
+                
+                total_received += len(chunk)
+                
+                if not use_stream:
+                    # Si aún estamos en modo buffer
+                    initial_buffer += chunk
+                    
+                    if len(initial_buffer) > max_buffer_size:
+                        # Cambiar a stream - archivo grande
+                        print(f"File exceeds {max_buffer_size} bytes, switching to stream mode")
+                        f.write(initial_buffer)  # Escribe lo acumulado
+                        initial_buffer = None  # Liberar memoria
+                        use_stream = True
+                else:
+                    # Modo stream - escribir directamente
+                    f.write(chunk)
+                
+                print(f"Received {total_received} bytes...")
+            
+            # Si terminó en modo buffer, escribir todo
+            if not use_stream and initial_buffer:
+                f.write(initial_buffer)
+        
+        return True, f'"{file_path}" file stored successfully ({total_received} bytes)'
+        
+    except SecurityError:
+        return False, "Path traversal attempt detected"
+    
+    except Exception as e:
+        print(f"Error storing file: {e}")
+        # Intentar limpiar archivo parcial
+        try:
+            if os.path.exists(full_path):
+                os.remove(full_path)
+        except:
+            pass
+        return False, "Failed to store file"
+
+def retrieve_file(user_root_directory, user_current_directory, file_path, data_conn, chunk_size=65536):
+    """Recupera y envía un archivo por streaming"""
+    try:
+        full_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        
+        if not os.path.exists(full_path):
+            return False, "File not found"
+        
+        if not os.path.isfile(full_path):
+            return False, "Not a file"
+        
+        file_size = os.path.getsize(full_path)
+        
+        # Streaming: leer y enviar por chunks
+        with open(full_path, 'rb') as f:
+            total_sent = 0
+            while True:
+                chunk = f.read(chunk_size)  # Lee chunk
+                if not chunk:
+                    break
+                data_conn.send(chunk)  # Envía chunk
+                total_sent += len(chunk)
+                # Opcional: mostrar progreso para archivos muy grandes
+                if file_size > 10485760:  # > 10MB
+                    print(f"RETR progress: {total_sent}/{file_size} bytes")
+        
+        return True, f"Transfer complete ({total_sent} bytes)"
+        
+    except SecurityError:
+        return False, "Path traversal attempt detected"
+    except Exception as e:
+        print(f"Error retrieving file: {e}")
+        return False, "Failed to retrieve file"
