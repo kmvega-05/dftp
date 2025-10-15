@@ -224,11 +224,12 @@ def change_directory(user_root_directory, user_current_directory, new_path):
         return None
         
     except SecurityError:
-        return None
+        # Si hay intento de path traversal, retornar root
+        return "/"
     except Exception as e:
         print(f"Error changing directory: {e}")
         return None
-
+    
 def create_directory(user_root_directory, user_current_directory, new_dir_path):
     """Crea un nuevo directorio de forma segura"""
     try:
