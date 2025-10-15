@@ -45,7 +45,9 @@ def secure_path_resolution(user_root_directory, user_current_directory, requeste
     real_path = get_real_filesystem_path(user_root_directory, virtual_path)
     
     # 3. Validar seguridad
-    return validate_path_within_root(user_root_directory, real_path)
+    validate_path_within_root(user_root_directory, real_path)
+
+    return virtual_path
 
 def resolve_ftp_path(user_current_directory, requested_path):
     """
@@ -105,8 +107,9 @@ def validate_path_within_root(user_root_directory, resolved_path):
 def directory_exists(user_root_directory, user_current_directory, path):
     """Verifica si un directorio existe"""
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, path)
-        return os.path.isdir(full_path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
+        return os.path.isdir(real_path)
     except SecurityError:
         return False
     except Exception:
@@ -115,8 +118,9 @@ def directory_exists(user_root_directory, user_current_directory, path):
 def file_exists(user_root_directory, user_current_directory, path):
     """Verifica si un archivo existe"""
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, path)
-        return os.path.isfile(full_path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
+        return os.path.isfile(real_path)
     except SecurityError:
         return False
     except Exception:
@@ -132,28 +136,29 @@ def get_file_info(user_root_directory, user_current_directory, path):
     Retorna rutas virtuales.
     """
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
-        if not os.path.exists(full_path):
+        if not os.path.exists(real_path):
             return None
         
-        stat = os.stat(full_path)
+        stat = os.stat(real_path)
         
         # Obtener ruta virtual (lo que el usuario ve)
         virtual_path = resolve_ftp_path(user_current_directory, path)
         name = os.path.basename(virtual_path)
         
         # Determinar tipo
-        if os.path.isdir(full_path):
+        if os.path.isdir(real_path):
             file_type = "directory"
-        elif os.path.isfile(full_path):
+        elif os.path.isfile(real_path):
             file_type = "file"
         else:
             file_type = "other"
         
         return {
             'name': name,
-            'virtual_path': virtual_path,
+            'path': virtual_path,
             'type': file_type,
             'size': stat.st_size,
             'permissions': stat.st_mode,
@@ -170,13 +175,14 @@ def list_directory_detailed(user_root_directory, user_current_directory, path=".
     Retorna string formateado simple.
     """
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
-        if not os.path.isdir(full_path):
+        if not os.path.isdir(real_path):
             return None
         
         entries = []
-        for entry_name in os.listdir(full_path):
+        for entry_name in os.listdir(real_path):
             # Para cada archivo en el filesystem real, crear su ruta virtual
             virtual_entry_path = resolve_ftp_path(user_current_directory, 
                                                 posixpath.join(path, entry_name))
@@ -199,12 +205,13 @@ def list_directory_names(user_root_directory, user_current_directory, path="."):
         List[str] con nombres de cada elemento
     """
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
-        if not os.path.isdir(full_path):
+        if not os.path.isdir(real_path):
             return []
         
-        return os.listdir(full_path)
+        return os.listdir(real_path)
         
     except (SecurityError, OSError):
         return []
@@ -240,9 +247,10 @@ def format_simple_listing(directory_entries):
 def change_directory(user_root_directory, user_current_directory, new_path):
     """Cambia el directorio actual"""
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, new_path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, new_path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
-        if os.path.isdir(full_path):
+        if os.path.isdir(real_path):
             # Resolver la nueva ruta virtual (lo que el usuario debe ver)
             virtual_path = resolve_ftp_path(user_current_directory, new_path)
             return virtual_path
@@ -258,14 +266,15 @@ def change_directory(user_root_directory, user_current_directory, new_path):
 def create_directory(user_root_directory, user_current_directory, new_dir_path):
     """Crea un nuevo directorio de forma segura"""
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, new_dir_path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, new_dir_path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
         # Verificar si el directorio ya existe
-        if os.path.exists(full_path):
+        if os.path.exists(real_path):
             return False, "Directory already exists"
         
         # Crear el directorio
-        os.makedirs(full_path)
+        os.makedirs(real_path)
         return True, f'"{new_dir_path}" directory created'
         
     except SecurityError:
@@ -277,22 +286,23 @@ def create_directory(user_root_directory, user_current_directory, new_dir_path):
 def remove_directory(user_root_directory, user_current_directory, dir_path):
     """Elimina un directorio de forma segura"""
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, dir_path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, dir_path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
         # Verificar si el directorio existe
-        if not os.path.exists(full_path):
+        if not os.path.exists(real_path):
             return False, "Directory does not exist"
         
         # Verificar que es un directorio
-        if not os.path.isdir(full_path):
+        if not os.path.isdir(real_path):
             return False, "Not a directory"
         
         # Verificar que el directorio esté vacío
-        if len(os.listdir(full_path)) > 0:
+        if len(os.listdir(real_path)) > 0:
             return False, "Directory not empty"
         
         # Eliminar el directorio
-        os.rmdir(full_path)
+        os.rmdir(real_path)
         return True, f'"{dir_path}" directory removed"'
         
     except SecurityError:
@@ -304,18 +314,19 @@ def remove_directory(user_root_directory, user_current_directory, dir_path):
 def delete_file(user_root_directory, user_current_directory, file_path):
     """Elimina un archivo de forma segura"""
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
         # Verificar si el archivo existe
-        if not os.path.exists(full_path):
+        if not os.path.exists(real_path):
             return False, "File not found"
         
         # Verificar que es un archivo (no un directorio)
-        if not os.path.isfile(full_path):
+        if not os.path.isfile(real_path):
             return False, "Not a file"
         
         # Eliminar el archivo
-        os.remove(full_path)
+        os.remove(real_path)
         return True, f'"{file_path}" file deleted'
         
     except SecurityError:
@@ -327,19 +338,22 @@ def delete_file(user_root_directory, user_current_directory, file_path):
 def rename_path(user_root_directory, user_current_directory, old_path, new_path):
     """Renombra un archivo o directorio de forma segura"""
     try:
-        old_full_path = secure_path_resolution(user_root_directory, user_current_directory, old_path)
-        new_full_path = secure_path_resolution(user_root_directory, user_current_directory, new_path)
+        old_virtual_path = secure_path_resolution(user_root_directory, user_current_directory, old_path)
+        old_real_path = get_real_filesystem_path(user_root_directory, old_virtual_path)
+
+        new_virtual_path = secure_path_resolution(user_root_directory, user_current_directory, new_path)
+        new_real_path = get_real_filesystem_path(user_root_directory, new_virtual_path)
         
         # Verificar que el origen existe
-        if not os.path.exists(old_full_path):
+        if not os.path.exists(old_real_path):
             return False, "Source path not found"
         
         # Verificar que el destino no existe
-        if os.path.exists(new_full_path):
+        if os.path.exists(new_real_path):
             return False, "Destination path already exists"
         
         # Renombrar
-        os.rename(old_full_path, new_full_path)
+        os.rename(old_real_path, new_real_path)
         return True, f'"{old_path}" renamed to "{new_path}"'
         
     except SecurityError:
@@ -358,11 +372,14 @@ def generate_unique_filename(user_root_directory, user_current_directory, origin
         unique_name = f"{name}_{uuid.uuid4().hex[:8]}{ext}"
         
         # Verificar que no exista (poco probable pero bueno)
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, unique_name)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, unique_name)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
+        
         counter = 1
-        while os.path.exists(full_path):
+        while os.path.exists(real_path):
             unique_name = f"{name}_{uuid.uuid4().hex[:8]}_{counter}{ext}"
-            full_path = secure_path_resolution(user_root_directory, user_current_directory, unique_name)
+            virtual_path = secure_path_resolution(user_root_directory, user_current_directory, unique_name)
+            real_path = get_real_filesystem_path(user_root_directory, virtual_path)
             counter += 1
         
         return unique_name
@@ -374,10 +391,11 @@ def generate_unique_filename(user_root_directory, user_current_directory, origin
 def store_file_optimized(user_root_directory, user_current_directory, file_path, data_conn, max_buffer_size=10485760):  # 10MB
     """Almacena archivo usando buffer pequeño o stream según tamaño"""
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
         # Crear directorio padre
-        parent_dir = os.path.dirname(full_path)
+        parent_dir = os.path.dirname(real_path)
         if not os.path.exists(parent_dir):
             os.makedirs(parent_dir, exist_ok=True)
         
@@ -386,7 +404,7 @@ def store_file_optimized(user_root_directory, user_current_directory, file_path,
         total_received = 0
         use_stream = False
         
-        with open(full_path, 'wb') as f:
+        with open(real_path, 'wb') as f:
             data_conn.settimeout(30.0)
             
             while True:
@@ -425,8 +443,8 @@ def store_file_optimized(user_root_directory, user_current_directory, file_path,
         print(f"Error storing file: {e}")
         # Intentar limpiar archivo parcial
         try:
-            if os.path.exists(full_path):
-                os.remove(full_path)
+            if os.path.exists(real_path):
+                os.remove(real_path)
         except:
             pass
         return False, "Failed to store file"
@@ -434,18 +452,19 @@ def store_file_optimized(user_root_directory, user_current_directory, file_path,
 def retrieve_file(user_root_directory, user_current_directory, file_path, data_conn, chunk_size=65536):
     """Recupera y envía un archivo por streaming"""
     try:
-        full_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        virtual_path = secure_path_resolution(user_root_directory, user_current_directory, file_path)
+        real_path = get_real_filesystem_path(user_root_directory, virtual_path)
         
-        if not os.path.exists(full_path):
+        if not os.path.exists(real_path):
             return False, "File not found"
         
-        if not os.path.isfile(full_path):
+        if not os.path.isfile(real_path):
             return False, "Not a file"
         
-        file_size = os.path.getsize(full_path)
+        file_size = os.path.getsize(real_path)
         
         # Streaming: leer y enviar por chunks
-        with open(full_path, 'rb') as f:
+        with open(real_path, 'rb') as f:
             total_sent = 0
             while True:
                 chunk = f.read(chunk_size)  # Lee chunk
