@@ -1,26 +1,26 @@
-from entities.file_system import delete_file, get_user_root_directory
+from entities.file_system_manager import delete_file, get_user_root_directory
 
 def handle_dele(command, client_socket, server, client_session):
     """Maneja comando DELE - Delete file"""
+
+    # Chequear argumentos
+    if not command.require_args(1):
+        server.send_response(client_socket, 501, "Syntax error in parameters")
+        return
+    
+    # Verificar autenticación
     if not client_session.is_authenticated():
         server.send_response(client_socket, 530, "Not logged in")
         return
 
-    if not command.require_args(1):
-        server.send_response(client_socket, 501, "Syntax error in parameters")
-        return
-
     filename = command.get_arg(0)
-    user_root = get_user_root_directory(client_session.username)
     
-    # Construir ruta completa
-    if filename.startswith('/'):
-        file_path = filename
-    else:
-        file_path = client_session.current_directory + '/' + filename
+    # Obtener directorio raíz y actual(para resolver rutas absolutas/relativas)
+    user_root = get_user_root_directory(client_session.username)
+    current_directory = client_session.get_current_directory()
     
     # Eliminar el archivo
-    success, message = delete_file(user_root, file_path)
+    success, message = delete_file(user_root, current_directory, filename)
     
     if success:
         server.send_response(client_socket, 250, message)
