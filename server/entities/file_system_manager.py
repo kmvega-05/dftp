@@ -167,13 +167,13 @@ def get_file_info(user_root_directory, user_current_directory, path):
 def list_directory_detailed(user_root_directory, user_current_directory, path="."):
     """
     Lista contenido con información completa (para LIST).
-    Retorna rutas virtuales.
+    Retorna string formateado simple.
     """
     try:
         full_path = secure_path_resolution(user_root_directory, user_current_directory, path)
         
         if not os.path.isdir(full_path):
-            return []
+            return None
         
         entries = []
         for entry_name in os.listdir(full_path):
@@ -185,10 +185,11 @@ def list_directory_detailed(user_root_directory, user_current_directory, path=".
             if file_info:
                 entries.append(file_info)
         
-        return entries
+        # Usar la función de formateo
+        return format_simple_listing(entries)
         
     except (SecurityError, OSError):
-        return []
+        return None
 
 def list_directory_names(user_root_directory, user_current_directory, path="."):
     """
@@ -207,6 +208,30 @@ def list_directory_names(user_root_directory, user_current_directory, path="."):
         
     except (SecurityError, OSError):
         return []
+
+def format_simple_listing(directory_entries):
+    """
+    Formatea una lista de entries a string simple.
+    
+    Args:
+        directory_entries: Lista de diccionarios de get_file_info
+    
+    Returns:
+        str: Listado formateado simple
+    """
+    if not directory_entries:
+        return ""
+    
+    listing = ""
+    for file_info in directory_entries:
+        type_indicator = "d" if file_info['type'] == 'directory' else "-"
+        size = file_info['size']
+        modified = file_info['modified']
+        name = file_info['name']
+        
+        listing += f"{type_indicator} {size:>8} {modified} {name}\r\n"
+    
+    return listing
     
 # ==============================================================================================
 # FILE AND DIRECTORY OPERATIONS
