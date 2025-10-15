@@ -1,10 +1,12 @@
 def handle_pwd(command, client_socket, server, client_session):
     """Maneja comando PWD - Print Working Directory"""
+    
+    # Chequear argumentos
     if not command.require_args(0):
         server.send_response(client_socket, 501, "Syntax error in parameters")
         return
 
-    # Verificar autenticación (depende de si quieres que sea público o no)
+    # Verificar autenticación
     if not client_session.is_authenticated():
         server.send_response(client_socket, 530, "Not logged in")
         return
