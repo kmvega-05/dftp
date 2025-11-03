@@ -15,11 +15,13 @@ def get_system_info():
     system = platform.system().lower()
     return SYSTEM_MAPPINGS.get(system, DEFAULT_SYSTEM_INFO)
 
-def handle_syst(command, client_socket, server, client_session):
-    """Maneja comando SYST - información del sistema"""
+def handle_syst(command, client_socket, client_session):
+    """Maneja comando SYST - información del sistema."""
+
     if not command.require_args(0):
-        server.send_response(client_socket, 501, "Syntax error in parameters")
+        client_session.send_response(client_socket, 501, "Syntax error in parameters")
         return
-    
+
     system_info = get_system_info()
-    server.send_response(client_socket, 215, system_info)
+
+    client_session.send_response(client_socket, 215, system_info)

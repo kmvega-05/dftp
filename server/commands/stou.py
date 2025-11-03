@@ -1,60 +1,82 @@
-from entities.file_system_manager import (
-    store_file_optimized, 
-    get_user_root_directory, 
-    generate_unique_filename, 
-    secure_path_resolution, 
-    get_real_filesystem_path, 
-    SecurityError)
+from entities.file_system_manager import _GLOBAL_FSM as fs_manager, SecurityError
+import socket
 
-def handle_stou(command, client_socket, server, client_session):
+def sock_reader(sock, chunk_size=65536):
+    try:
+        while True:
+            chunk = sock.recv(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        return
+
+
+class TransferObj:
+    def __init__(self, sock):
+        self.data_socket = sock
+
+    def cancel(self):
+        try:
+            try:
+                self.data_socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            self.data_socket.close()
+        except Exception:
+            pass
+
+
+def handle_stou(command, client_socket, client_session):
     """Maneja comando STOU (Store Unique) - Guarda un archivo con nombre único"""
-    
-    # Verificar autenticación
+
     if not client_session.is_authenticated():
-        server.send_response(client_socket, 530, "Not logged in")
+        client_session.send_response(client_socket, 530, "Not logged in")
         return
 
-    # Verificar modo pasivo activo
-    if not client_session.pasv_mode or not client_session.data_socket:
-        server.send_response(client_socket, 425, "Use PASV first")
+    data_socket, _ = client_session.get_pasv_info()
+    if not data_socket:
+        client_session.send_response(client_socket, 425, "Use PASV first")
         return
 
-    # STOU puede tener 0 o 1 argumentos (nombre sugerido)
-    original_filename = command.get_arg(0) if command.has_args() else "file"
-    user_root = get_user_root_directory(client_session.username)
+    original_filename = command.get_arg(0) if command.arg_count() > 0 else "file"
+    user_root = client_session.root_directory
 
     try:
-        # Generar nombre único y construir ruta segura
-        unique_filename = generate_unique_filename(user_root, original_filename)
-        virtual_path = secure_path_resolution(user_root, client_session.current_directory, unique_filename)
-        real_path = get_real_filesystem_path(user_root, virtual_path)
+        unique_filename = fs_manager.generate_unique_filename(user_root, client_session.current_directory, original_filename)
+    except Exception as e:
+        client_session.send_response(client_socket, 450, str(e))
+        return
 
-        # Aceptar conexión de datos
-        print("Waiting for data connection for STOU upload...")
-        data_conn, data_addr = client_session.data_socket.accept()
-        print(f"Data connection established with {data_addr}")
+    try:
+        data_conn, _ = data_socket.accept()
+    except socket.error:
+        client_session.send_response(client_socket, 425, "Can't open data connection")
+        client_session.cleanup_pasv()
+        return
 
-        # Enviar respuesta preliminar con el nombre único
-        server.send_response(client_socket, 150, f'File: {unique_filename}')
+    # register transfer
+    transfer = TransferObj(data_conn)
+    tid = client_session.start_transfer(transfer)
 
-        # Guardar archivo
-        success, message = store_file_optimized(user_root, real_path, data_conn)
-        data_conn.close()
+    try:
+        client_session.send_response(client_socket, 150, f'File: {unique_filename}')
+        success, message = fs_manager.store_stream(user_root, client_session.current_directory, unique_filename, sock_reader(data_conn))
+        try:
+            data_conn.close()
+        except Exception:
+            pass
 
         if success:
-            # RFC 959 indica que STOU responde con 250 al completar correctamente
-            server.send_response(client_socket, 250, f'{unique_filename}')
-            print(f"File stored with unique name: {unique_filename}")
+            client_session.send_response(client_socket, 250, f'{unique_filename}')
         else:
-            server.send_response(client_socket, 550, message)
-            print(f"Failed to store file: {message}")
+            client_session.send_response(client_socket, 550, message)
 
-    except SecurityError:
-        server.send_response(client_socket, 550, "Path traversal attempt detected")
-        print("SecurityError: Path traversal detected during STOU")
-    except Exception as e:
-        print(f"Error in STOU command: {e}")
-        server.send_response(client_socket, 450, "Requested file action not taken")
+    except SecurityError as e:
+        client_session.send_response(client_socket, 550, str(e))
+    except Exception:
+        client_session.send_response(client_socket, 450, "Requested file action not taken")
 
     finally:
+        client_session.finish_transfer(tid)
         client_session.cleanup_pasv()
