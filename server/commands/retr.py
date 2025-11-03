@@ -1,65 +1,83 @@
 import socket
-from entities.file_system_manager import retrieve_file, get_user_root_directory, secure_path_resolution
+from entities.file_system_manager import _GLOBAL_FSM as fs_manager, SecurityError
 
-def handle_retr(command, client_socket, server, client_session):
+class TransferObj:
+    def __init__(self, sock):
+        self.data_socket = sock
+
+    def cancel(self):
+        try:
+            # attempt an orderly shutdown before close
+            try:
+                self.data_socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            self.data_socket.close()
+        except Exception:
+            pass
+
+
+def handle_retr(command, client_socket, client_session):
     """Maneja comando RETR - descarga de archivo mediante data connection (streaming)."""
-    
-    # 1. Validación de sesión y argumentos
+
     if not client_session.is_authenticated():
-        server.send_response(client_socket, 530, "Not logged in")
+        client_session.send_response(client_socket, 530, "Not logged in")
         return
 
     if not command.require_args(1):
-        server.send_response(client_socket, 501, "Syntax error in parameters")
+        client_session.send_response(client_socket, 501, "Syntax error in parameters")
         return
 
-    # 2. Validar modo PASV y socket de datos
-    if not client_session.pasv_mode or not client_session.data_socket:
-        server.send_response(client_socket, 425, "Use PASV first")
+    data_socket, _ = client_session.get_pasv_info()
+    if not data_socket:
+        client_session.send_response(client_socket, 425, "Use PASV first")
         return
 
     filename = command.get_arg(0)
-    user_root = get_user_root_directory(client_session.username)
+    user_root = client_session.root_directory
 
     try:
-        # Resolución segura de la ruta (virtual)
-        virtual_path = secure_path_resolution(user_root,client_session.current_directory,filename)
-    
-    except ValueError as e:
-        server.send_response(client_socket, 550, str(e))
-        client_session.cleanup_pasv()
-        return
-
-    # 3. Aceptar conexión de datos
-    try:
-        print("Waiting for data connection for file download...")
-        data_conn, data_addr = client_session.data_socket.accept()
-        print(f"Data connection established with {data_addr}")
-
-    except socket.error as e:
-        print(f"Data connection error: {e}")
-        server.send_response(client_socket, 425, "Can't open data connection")
-        client_session.cleanup_pasv()
-        return
-
-    # 4. Transferir archivo con streaming
-    try:
-        server.send_response(client_socket, 150, f"Opening data connection for {filename}")
-
-        success, message = retrieve_file(user_root, client_session.current_directory,filename, data_conn)
-
-        data_conn.close()
-
-        if success:
-            server.send_response(client_socket, 226, message)
-            print(f"RETR successful: {virtual_path} - {message}")
-        else:
-            server.send_response(client_socket, 550, message)
-            print(f"RETR failed: {message}")
-
+        # ensure resource exists and is a file
+        fs_manager.exists(user_root, client_session.current_directory, filename, want='file')
     except Exception as e:
-        print(f"Error in RETR command: {e}")
-        server.send_response(client_socket, 450, "Requested file action not taken")
+        client_session.send_response(client_socket, 550, str(e))
+        return
+
+    try:
+        data_conn, _ = data_socket.accept()
+    except socket.error:
+        client_session.send_response(client_socket, 425, "Can't open data connection")
+        client_session.cleanup_pasv()
+        return
+
+    # register transfer
+    transfer = TransferObj(data_conn)
+    tid = client_session.start_transfer(transfer)
+
+    try:
+        client_session.send_response(client_socket, 150, f"Opening data connection for {filename}")
+
+        gen = fs_manager.retrieve_stream(user_root, client_session.current_directory, filename)
+        for chunk in gen:
+            try:
+                data_conn.sendall(chunk)
+            except Exception:
+                raise
+
+        try:
+            data_conn.close()
+        except Exception:
+            pass
+
+        client_session.send_response(client_socket, 226, f"Transfer complete")
+
+    except FileNotFoundError:
+        client_session.send_response(client_socket, 550, "File not found")
+    except SecurityError as e:
+        client_session.send_response(client_socket, 550, str(e))
+    except Exception:
+        client_session.send_response(client_socket, 450, "Requested file action not taken")
 
     finally:
+        client_session.finish_transfer(tid)
         client_session.cleanup_pasv()
