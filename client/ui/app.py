@@ -147,9 +147,17 @@ with col1:
                         # run stor in a thread to avoid blocking
                         t, result = run_in_thread(handler._stor, local_path, remote)
                         with st.spinner("Uploading..."):
+                            # create a single progress bar and update it until the upload thread finishes
+                            p = st.progress(0)
+                            start = time.time()
                             while t.is_alive():
                                 time.sleep(0.1)
-                                st.progress(min(100, int((time.time()*10)%100)))
+                                # animate progress while the upload runs. Keep value <100 until finished
+                                elapsed = time.time() - start
+                                value = min(99, int((elapsed * 10) % 100))
+                                p.progress(value)
+                            # ensure progress shows complete when done
+                            p.progress(100)
                         if result["error"]:
                             st.error(f"Error: {result['error']}")
                         else:
