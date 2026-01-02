@@ -1,2 +1,0 @@
-# Requirements for the dFTP client UI
-streamlit>=1.0
