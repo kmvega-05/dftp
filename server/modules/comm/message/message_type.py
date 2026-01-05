@@ -64,11 +64,11 @@ class MessageType:
 
     # Lectura de metadatos (RETR)
     DATA_META_REQUEST = "DATA_META_REQUEST"
-    DATA_META_RESPONSE = "DATA_META_RESPONSE"
+    DATA_META_REQUEST_ACK = "DATA_META_ACK"
 
     # Read repair / sincronización
     UPDATE_FROM_NODE = "UPDATE_FROM_NODE"
-    UPDATE_ACK = "UPDATE_ACK"
+    UPDATE_FROM_NODE_ACK = "UPDATE_ACK"
 
     # Resolución de conflictos
     RENAME_FILE = "RENAME_FILE"
@@ -76,7 +76,7 @@ class MessageType:
 
     # Bootstrap / join de nuevos DataNodes
     CLUSTER_STATE_REQUEST = "CLUSTER_STATE_REQUEST"
-    CLUSTER_STATE_RESPONSE = "CLUSTER_STATE_RESPONSE"
+    CLUSTER_STATE_ACK = "CLUSTER_STATE_ACK"
 
     # Transferencia interna entre DataNodes
     DATA_PUSH = "DATA_PUSH"
