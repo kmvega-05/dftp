@@ -1,6 +1,9 @@
 import socket
 import threading
 import logging
+import os
+import time
+import uuid
 
 from typing import Dict
 from server.modules.discovery import LocationNode, NodeType
@@ -9,6 +12,8 @@ from server.modules.app.data_node.file_system_manager import FileSystemManager, 
 from server.modules.app.data_node.metadata import FileMetadata, MetadataTable
 
 logger = logging.getLogger("dftp.app.data_node")
+
+K_REPLICAS = int(os.environ.get("DATA_NODE_REPLICATION_K", 3))
 
 class DataNode(LocationNode):
     """
@@ -46,6 +51,8 @@ class DataNode(LocationNode):
         self.register_handler(MessageType.DATA_RETR_FILE, self._handle_retr)
         self.register_handler(MessageType.DATA_STORE_FILE, self._handle_store)
         self.register_handler(MessageType.DATA_META_REQUEST, self._handle_data_meta_request)
+        self.register_handler(MessageType.DATA_REPLICATE_FILE, self._handle_replicate_file)
+        self.register_handler(MessageType.DATA_REPLICATE_READY, self._handle_replicate_ready)
 
     def _handle_cwd(self, message: Message):
         user = message.payload.get("user")
@@ -315,27 +322,32 @@ class DataNode(LocationNode):
         logger.info("RETR exitoso")
         return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
+    
     def _handle_store(self, message: Message):
-        
         session_id = message.payload.get("session_id")
         user = message.payload.get("user")
         cwd = message.payload.get("cwd")
         path = message.payload.get("path")
         chunk_size = message.payload.get("chunk_size", 65536)
+        replicate_to = message.payload.get("replicate_to", [])
+        version = message.payload.get("version")
+        transfer_id = message.payload.get("transfer_id")
 
-        if not all([session_id, user, cwd, path]):
+        if not all([session_id, user, cwd, path, version, transfer_id]):
             return Message(MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "Missing required arguments"})
 
         sock = self._consume_pasv_socket(session_id)
         if not sock:
-            return Message(MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "No passive socket for session"})
+            return Message(
+                MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "No passive socket for session"})
 
         try:
             namespace = self.fs.get_namespace(user)
 
-            # Avisamos al routing node que ya puede enviar el 150 al cliente
-            self.send_message(message.header.get("src"), 9000, Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id}))
+            # Avisamos al routing node que puede enviar el 150
+            self.send_message(message.header.get("src"), 9000,Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id}))
 
+            # Guardar archivo localmente
             conn, addr = sock.accept()
             with conn:
                 def data_gen():
@@ -347,13 +359,42 @@ class DataNode(LocationNode):
 
                 self.fs.write_stream(namespace, cwd, path, data_gen(), chunk_size=chunk_size)
 
+            virtual_path = self.fs.normalize_virtual_path(cwd, path)
+
+            # Crear y guardar metadata local
+            file_metadata = FileMetadata(filename=virtual_path, version=version, transfer_id=transfer_id, timestamp=time.time())
+            self.metadata_table.upsert(file_metadata)
+
+            # Replicar en paralelo
+            ack_counter = [0]  # lista para mutabilidad en threads
+            ack_lock = threading.Lock()
+            ack_event = threading.Event()
+
+            threads = [
+                threading.Thread(target=self._replicate_to_node,
+                    args=(ip, file_metadata, path, user, cwd, ack_counter, ack_lock, ack_event, len(replicate_to)))
+                for ip in replicate_to]
+
+            for t in threads:
+                t.start()
+
+            # Esperamos hasta recibir K acks
+            if not replicate_to:
+                ack_event.set()
+            else:
+                ack_event.wait()
+
+            # 5️⃣ Retornamos respuesta al cliente
+            status = "OK" if ack_counter[0] >= min(K_REPLICAS, len(replicate_to)) else "partial"
+
+            return Message(MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": status, "acks_received": ack_counter[0]})
+
         except Exception as e:
             logger.exception(str(e))
             return Message(MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": str(e)})
+        
         finally:
             sock.close()
-
-        return Message(MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
     def _handle_data_meta_request(self, message: Message) -> Message:
         """
@@ -375,3 +416,164 @@ class DataNode(LocationNode):
         except Exception:
             logger.exception("[%s] Error procesando DATA_META_REQUEST", self.node_name)
             return Message(type=MessageType.DATA_META_REQUEST_ACK, src=self.ip, dst=message.header.get("src"), payload={"success": False, "metadata": []})
+
+    def _handle_replicate_file(self, message: Message):
+        payload = message.payload or {}
+        filename = payload.get("filename")
+        metadata_dict = payload.get("metadata")
+        user = payload.get("user")
+        cwd = payload.get("cwd")
+        chunk_size = payload.get("chunk_size", 65536)
+
+        if not filename or not metadata_dict or not user or cwd is None:
+            return Message(MessageType.DATA_REPLICATE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "Missing required fields (filename, metadata, user, cwd)"})
+
+        file_metadata = FileMetadata.from_dict(metadata_dict)
+
+        sock = None
+        try:
+            # Preparar socket temporal para recibir el archivo
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((self.ip, 0))  # puerto aleatorio disponible
+            sock.listen(1)
+            listen_ip, listen_port = sock.getsockname()
+
+            # Responder inmediatamente con IP/puerto y info del archivo
+            ready_msg = Message(type=MessageType.DATA_REPLICATE_READY, src=self.ip, dst=message.header.get("src"), payload={"ip": listen_ip, "port": listen_port, "filename": filename, "user": user, "cwd": cwd})
+            self.send_message(message.header.get("src"), 9000, ready_msg, await_response=False)
+
+            # Esperar conexión del nodo que enviará el archivo
+            conn, _ = sock.accept()
+            with conn:
+                def chunk_gen():
+                    while True:
+                        chunk = conn.recv(chunk_size)
+                        if not chunk:
+                            break
+                        yield chunk
+
+                # Guardar archivo en filesystem
+                namespace = self.fs.get_namespace(user)
+                self.fs.write_stream(namespace, cwd, filename, chunk_gen(), chunk_size=chunk_size)
+
+            # Actualizar metadata
+            self.metadata_table.upsert(file_metadata)
+
+            return Message(MessageType.DATA_REPLICATE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
+
+        except Exception as e:
+            logger.exception("DATA_REPLICATE_FILE failed: %s", e)
+            return Message(MessageType.DATA_REPLICATE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": str(e)})
+
+        finally:
+                try:
+                    sock.close()
+                except:
+                    pass
+
+    def _handle_replicate_ready(self, message: Message):
+        """
+        Maneja DATA_REPLICATE_READY:
+        - Se conecta al nodo destino usando IP/puerto indicados.
+        - Envía el archivo en stream.
+        """
+        payload = message.payload or {}
+        ip = payload.get("ip")
+        port = payload.get("port")
+        filename = payload.get("filename")
+        user = payload.get("user")
+        cwd = payload.get("cwd")
+
+        if not all([ip, port, filename, user, cwd]):
+            logger.error("Missing required fields in DATA_REPLICATE_READY")
+            return  # Mensaje de control, no return de respuesta
+
+        try:
+            # Determinar la ruta real y generar stream del archivo
+            namespace = self.fs.get_namespace(user)
+
+            # Generador de chunks
+            chunk_gen = self.fs.read_stream(namespace, cwd, filename)
+
+            # Conectar al nodo destino
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.connect((ip, port))
+                logger.info("Sending file '%s' to %s:%s", filename, ip, port)
+                for chunk in chunk_gen:
+                    sock.sendall(chunk)
+
+            logger.info("File '%s' sent successfully to %s:%s", filename, ip, port)
+
+        except Exception as e:
+            logger.exception("Error replicating file '%s' to %s:%s", filename, ip, port)
+
+    def _replicate_to_node(self, target_ip: str, file_metadata: FileMetadata, path: str, user: str, cwd: str, ack_counter: list, ack_lock: threading.Lock, ack_event: threading.Event, total_peers : int):
+        """
+        Envía DATA_REPLICATE_FILE a un nodo objetivo y actualiza contador de acks.
+        """
+        try:
+            replicate_msg = Message(type=MessageType.DATA_REPLICATE_FILE, src=self.ip, dst=target_ip, payload={"filename": path, "metadata": file_metadata.to_dict(), "user": user, "cwd": cwd})
+            ack = self.send_message(target_ip, 9000, replicate_msg, await_response=True)  # sin timeout global
+            if ack and ack.metadata.get("status") == "OK":
+                with ack_lock:
+                    ack_counter[0] += 1
+                    if ack_counter[0] >= min(K_REPLICAS, total_peers):
+                        ack_event.set()
+        except Exception:
+            # ignoramos errores de nodos individuales
+            pass
+
+    def _handle_rename_file(self, message: Message):
+        payload = message.payload or {}
+        filename = payload.get("filename")
+        user = payload.get("user")
+        cwd = payload.get("cwd")
+
+        if not all([filename, user, cwd is not None]):
+            return Message(MessageType.RENAME_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "Missing required fields (filename, user, cwd)"})
+
+        try:
+            namespace = self.fs.get_namespace(user)
+
+            # Generar un nombre único
+            new_filename = self._generate_unique_filename(namespace, cwd, filename)
+
+            # Renombrar archivo en filesystem
+            self.fs.rename_path(namespace, cwd, filename, new_filename)
+
+            # Actualizar metadata: eliminamos la antigua y creamos una nueva
+            old_meta = self.metadata_table.get(filename)
+            if old_meta:
+                self.metadata_table.remove(filename)
+            
+            new_meta = FileMetadata(new_filename, 1, uuid.uuid4(), timestamp=time.time())
+            self.metadata_table.upsert(new_meta)
+
+            return Message(MessageType.RENAME_FILE_ACK, self.ip, message.header.get("src"), payload={"new_filename": new_filename}, metadata={"status": "OK"})
+
+        except Exception as e:
+            logger.exception("RENAME_FILE failed: %s", e)
+            return Message(MessageType.RENAME_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": str(e)})
+
+
+    def _generate_unique_filename(self, namespace: str, cwd: str, filename: str) -> str:
+        """
+        Genera un nombre único basado en `filename` dentro del cwd del namespace.
+        Si `filename` ya existe, agrega un sufijo (1), (2), ... hasta encontrar uno disponible.
+        """
+        name, ext = os.path.splitext(filename)
+        counter = 1
+        new_filename = filename
+
+        while True:
+            try:
+                # Intentamos validar; si existe, seguimos iterando
+                self.fs.validate_path(namespace, cwd, new_filename, want="any")
+                new_filename = f"{name}({counter}){ext}"
+                counter += 1
+            except FileNotFoundError:
+                break  # nombre disponible
+
+        return new_filename
+
