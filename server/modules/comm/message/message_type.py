@@ -87,4 +87,5 @@ class MessageType:
     # Replicación Gossip
     GOSSIP_UPDATE = "GOSSIP_UPDATE"
     MERGE_STATE = "MERGE_STATE"
+    MERGE_STATE_ACK = "MERGE_STATE_ACK"
     SEND_STATE = "SEND_STATE"
