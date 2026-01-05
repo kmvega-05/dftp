@@ -59,8 +59,10 @@ class MessageType:
     # =========================
 
     # Escrituras replicadas (STOR)
-    DATA_WRITE = "DATA_WRITE"
-    DATA_WRITE_ACK = "DATA_WRITE_ACK"
+    DATA_REPLICATE_FILE = "DATA_REPLICATE_FILE"
+    DATA_REPLICATE_FILE_ACK = "DATA_REPLICATE_FILE_ACK"
+
+    DATA_REPLICATE_READY = "DATA_REPLICATE_READY"
 
     # Lectura de metadatos (RETR)
     DATA_META_REQUEST = "DATA_META_REQUEST"
