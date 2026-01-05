@@ -83,3 +83,8 @@ class MessageType:
     # Transferencia interna entre DataNodes
     DATA_PUSH = "DATA_PUSH"
     DATA_PUSH_ACK = "DATA_PUSH_ACK"
+
+    # Replicación Gossip
+    GOSSIP_UPDATE = "GOSSIP_UPDATE"
+    MERGE_STATE = "MERGE_STATE"
+    SEND_STATE = "SEND_STATE"
