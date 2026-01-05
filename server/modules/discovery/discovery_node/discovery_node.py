@@ -314,7 +314,7 @@ class DiscoveryNode(CommunicationNode):
     def _probe_send_heartbeat(self, ip_addr: str):
         """ Envía un DISCOVERY_HEARTBEAT a ip_addr; devuelve (ip, response)"""
         try:
-            msg = Message(type=MessageType.DISCOVERY_HEARTBEAT_MSG, src=self.ip, dst=ip_addr, payload={"name": self.node_name, "ip": self.ip, "role": "DISCOVERY"})
+            msg = Message(type=MessageType.DISCOVERY_HEARTBEAT, src=self.ip, dst=ip_addr, payload={"name": self.node_name, "ip": self.ip, "role": "DISCOVERY"})
             resp = self.send_message(ip_addr, self.port, msg, await_response=True, timeout=self.discovery_timeout)
             return ip_addr, resp
         except Exception:
