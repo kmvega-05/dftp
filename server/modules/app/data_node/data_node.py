@@ -45,6 +45,7 @@ class DataNode(LocationNode):
         self.register_handler(MessageType.DATA_LIST, self._handle_list)
         self.register_handler(MessageType.DATA_RETR_FILE, self._handle_retr)
         self.register_handler(MessageType.DATA_STORE_FILE, self._handle_store)
+        self.register_handler(MessageType.DATA_META_REQUEST, self._handle_data_meta_request)
 
     def _handle_cwd(self, message: Message):
         user = message.payload.get("user")
@@ -354,3 +355,23 @@ class DataNode(LocationNode):
 
         return Message(MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
+    def _handle_data_meta_request(self, message: Message) -> Message:
+        """
+        Maneja DATA_META_REQUEST.
+        Devuelve metadatos de un archivo específico o de todos los archivos.
+        """
+        payload = message.payload or {}
+        filename = payload.get("filename")
+
+        try:
+            if filename:
+                meta = self.metadata_table.get(filename)
+                metadata = [meta.to_dict()] if meta else []
+            else:
+                metadata = [m.to_dict() for m in self.metadata_table.all()]
+
+            return Message(type=MessageType.DATA_META_REQUEST_ACK, src=self.ip, dst=message.header.get("src"), payload={"success": True, "metadata": metadata})
+
+        except Exception:
+            logger.exception("[%s] Error procesando DATA_META_REQUEST", self.node_name)
+            return Message(type=MessageType.DATA_META_REQUEST_ACK, src=self.ip, dst=message.header.get("src"), payload={"success": False, "metadata": []})
