@@ -1,19 +1,37 @@
 class MessageType:
     """Clase estática que contiene constantes para los diferentes tipos de mensajes"""
+
+    # =========================
     # Discovery messages
+    # =========================
     DISCOVERY_HEARTBEAT = "DISCOVERY_HEARTBEAT"
     DISCOVERY_QUERY_BY_NAME = "DISCOVERY_QUERY_BY_NAME"
     DISCOVERY_QUERY_BY_ROLE = "DISCOVERY_QUERY_BY_ROLE"
     DISCOVERY_QUERY_ALL = "DISCOVERY_QUERY_ALL"
 
-    # FTP processing
-    PROCESS_FTP_COMMAND = "PROCESS_FTP_COMMAND"
+    DISCOVERY_HEARTBEAT_ACK = "DISCOVERY_HEARTBEAT_ACK"
+    DISCOVERY_QUERY_BY_NAME_ACK = "DISCOVERY_QUERY_BY_NAME_ACK"
+    DISCOVERY_QUERY_BY_ROLE_ACK = "DISCOVERY_QUERY_BY_ROLE_ACK"
+    DISCOVERY_QUERY_ALL_ACK = "DISCOVERY_QUERY_ALL_ACK"
 
+    # =========================
+    # FTP processing
+    # =========================
+    PROCESS_FTP_COMMAND = "PROCESS_FTP_COMMAND"
+    PROCESS_FTP_COMMAND_ACK = "PROCESS_FTP_COMMAND_ACK"
+
+    # =========================
     # Auth
+    # =========================
     AUTH_VALIDATE_USER = "AUTH_VALIDATE_USER"
     AUTH_VALIDATE_PASSWORD = "AUTH_VALIDATE_PASSWORD"
 
-    # Data Node
+    AUTH_VALIDATE_USER_ACK = "AUTH_VALIDATE_USER_ACK"
+    AUTH_VALIDATE_PASSWORD_ACK = "AUTH_VALIDATE_PASSWORD_ACK"
+
+    # =========================
+    # Data Node – FTP operations
+    # =========================
     DATA_LIST = "DATA_LIST"
     DATA_STAT = "DATA_STAT"
     DATA_MKD = "DATA_MKD"
@@ -25,14 +43,6 @@ class MessageType:
     DATA_STORE_FILE = "DATA_STORE_FILE"
     DATA_READY = "DATA_READY"
 
-    # ACKs
-    DISCOVERY_HEARTBEAT_ACK = "DISCOVERY_HEARTBEAT_ACK"
-    DISCOVERY_QUERY_BY_NAME_ACK = "DISCOVERY_QUERY_BY_NAME_ACK"
-    DISCOVERY_QUERY_BY_ROLE_ACK = "DISCOVERY_QUERY_BY_ROLE_ACK"
-    DISCOVERY_QUERY_ALL_ACK = "DISCOVERY_QUERY_ALL_ACK"
-    PROCESS_FTP_COMMAND_ACK = "PROCESS_FTP_COMMAND_ACK"
-    AUTH_VALIDATE_USER_ACK = "AUTH_VALIDATE_USER_ACK"
-    AUTH_VALIDATE_PASSWORD_ACK = "AUTH_VALIDATE_PASSWORD_ACK"
     DATA_LIST_ACK = "DATA_LIST_ACK"
     DATA_STAT_ACK = "DATA_STAT_ACK"
     DATA_MKD_ACK = "DATA_MKD_ACK"
@@ -43,3 +53,31 @@ class MessageType:
     DATA_RETR_FILE_ACK = "DATA_RETR_FILE_ACK"
     DATA_STORE_FILE_ACK = "DATA_STORE_FILE_ACK"
     DATA_READY_ACK = "DATA_READY_ACK"
+
+    # =========================
+    # Data Node – Replication (RRR)
+    # =========================
+
+    # Escrituras replicadas (STOR)
+    DATA_WRITE = "DATA_WRITE"
+    DATA_WRITE_ACK = "DATA_WRITE_ACK"
+
+    # Lectura de metadatos (RETR)
+    DATA_META_REQUEST = "DATA_META_REQUEST"
+    DATA_META_RESPONSE = "DATA_META_RESPONSE"
+
+    # Read repair / sincronización
+    UPDATE_FROM_NODE = "UPDATE_FROM_NODE"
+    UPDATE_ACK = "UPDATE_ACK"
+
+    # Resolución de conflictos
+    RENAME_FILE = "RENAME_FILE"
+    RENAME_FILE_ACK = "RENAME_FILE_ACK"
+
+    # Bootstrap / join de nuevos DataNodes
+    CLUSTER_STATE_REQUEST = "CLUSTER_STATE_REQUEST"
+    CLUSTER_STATE_RESPONSE = "CLUSTER_STATE_RESPONSE"
+
+    # Transferencia interna entre DataNodes
+    DATA_PUSH = "DATA_PUSH"
+    DATA_PUSH_ACK = "DATA_PUSH_ACK"
