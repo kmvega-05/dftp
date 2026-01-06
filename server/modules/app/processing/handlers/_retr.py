@@ -8,6 +8,8 @@ from server.modules.comm import Message, MessageType
 logger = logging.getLogger("dftp.processing.handlers.retr")
 
 def handle_retr(cmd: Command, data: dict = None, processing_node=None) -> tuple[int, str, dict]:
+    logger.info("Procesando RETR command ...")
+    
     if not cmd.require_args(1):
         return 501, "Syntax error in parameters. Usage: RETR <filename>", None
     if not data or not processing_node:
@@ -23,10 +25,13 @@ def handle_retr(cmd: Command, data: dict = None, processing_node=None) -> tuple[
         return 451, "Requested action aborted. File system unavailable.", None
 
     file_candidates = []
+    logger.info("Finding newest version of file")
     for node in data_nodes:
         try:
-            meta_resp = processing_node.send_message(node["ip"], 9000, Message(type=MessageType.DATA_META_REQUEST, src=processing_node.ip, dst=node["ip"], payload={"filename": filename}), await_response=True, timeout=30)
+            meta_resp = processing_node.send_message(node["ip"], 9000, Message(type=MessageType.DATA_META_REQUEST, src=processing_node.ip, dst=node["ip"], payload={"filename": filename, "cwd": session.get_cwd()}), await_response=True, timeout=30)
             
+            logger.info("Response from %s : %s", node['ip'], meta_resp)
+
             if meta_resp and meta_resp.payload.get("success"):
                 for meta in meta_resp.payload.get("metadata", []):
                     if meta.get("filename") == filename:
@@ -74,6 +79,7 @@ def handle_retr(cmd: Command, data: dict = None, processing_node=None) -> tuple[
 
         if not response:
             return 451, "Requested action aborted. File transfer failed.", session.to_json()
+        
         if response.metadata.get("status") != "OK":
             return 550, response.metadata.get("message", "Failed to retrieve file."), session.to_json()
         
