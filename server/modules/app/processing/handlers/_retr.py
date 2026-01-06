@@ -34,8 +34,7 @@ def handle_retr(cmd: Command, data: dict = None, processing_node=None) -> tuple[
 
             if meta_resp and meta_resp.payload.get("success"):
                 for meta in meta_resp.payload.get("metadata", []):
-                    if meta.get("filename") == filename:
-                        file_candidates.append({"node": node, "version": meta.get("version", 1), "transfer_id": meta.get("transfer_id", "0")})
+                    file_candidates.append({"node": node, "version": meta.get("version", 1), "transfer_id": meta.get("transfer_id", "0")})
         
         except Exception as e:
             logger.warning("Failed to query metadata from DataNode (%s): %s", node["ip"], e)
