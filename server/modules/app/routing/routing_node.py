@@ -2,10 +2,14 @@ import socket
 import threading
 import logging
 import uuid
+from typing import List
+import time
 
-from server.modules.discovery import LocationNode, NodeType
+from server.modules.consistency import GossipNode
+from server.modules.discovery import NodeType
 from server.modules.comm import Message, MessageType
 from server.modules.app.routing.client_session.client_session import ClientSession
+from server.modules.app.routing.client_session.session_table import SessionTable
 
 INTERNAL_PORT = 9000
 
@@ -15,7 +19,7 @@ class NoProcessingNodeException(Exception):
     """No hay processing nodes disponibles para despachar comandos FTP."""
     pass
 
-class RoutingNode(LocationNode):
+class RoutingNode(GossipNode):
     """
     RoutingNode:
 
@@ -25,11 +29,11 @@ class RoutingNode(LocationNode):
     """
 
     def __init__(self, node_name: str, ip: str, ftp_port: int = 21, internal_port: int = 9000, discovery_timeout: float = 0.8, heartbeat_interval: int = 2):
-        super().__init__(node_name=node_name, ip=ip, port=internal_port, node_role=NodeType.ROUTING, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval)
+        # Inicializar GossipNode para permitir replicación de estado entre routing nodes
+        super().__init__(node_name=node_name, ip=ip, port=internal_port, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval, node_role=NodeType.ROUTING)
 
         self.ftp_port = ftp_port
-        self._sessions: dict[str, ClientSession] = {}  # Diccionario de session_id -> ClientSession
-        self._sessions_lock = threading.Lock()
+        self._session_table = SessionTable()
 
         self.register_handler(MessageType.DATA_READY, self._handle_data_ready)
         self._start_ftp_listener()
@@ -69,11 +73,18 @@ class RoutingNode(LocationNode):
 
 
     def _handle_client(self, client_sock, client_addr) -> None:
+
         session_id = str(uuid.uuid4())
         session = ClientSession(session_id=session_id, client_ip=client_addr[0], control_socket=client_sock)
-        
-        with self._sessions_lock:
-            self._sessions[session_id] = session 
+
+        # Registrar la sesión en la tabla
+        self._session_table.add(session)
+
+        # Notificar peers (gossip) del nuevo estado de sesión
+        try:
+            self.notify_local_change({"op": "add", "session": session.to_json()})
+        except Exception:
+            logger.debug("[%s] notify_local_change failed on add", self.node_name)
 
         try:
             session.send_response(220, "Distributed FTP Server Ready")
@@ -106,8 +117,12 @@ class RoutingNode(LocationNode):
             except Exception:
                 pass
 
-            with self._sessions_lock:
-                self._sessions.pop(session_id, None)
+            # Eliminar de la tabla de sesiones
+            self._session_table.remove_by_id(session_id)
+            try:
+                self.notify_local_change({"op": "delete", "session_id": session_id})
+            except Exception:
+                logger.debug("[%s] notify_local_change failed on delete", self.node_name)
 
     def _dispatch_ftp_command(self, session: ClientSession, line: str) -> bool:
         """
@@ -146,8 +161,7 @@ class RoutingNode(LocationNode):
             logger.warning("[%s] DATA_READY recibido sin session_id", self.node_name)
             return Message(MessageType.DATA_READY_ACK, self.ip, message.header.get("src"), payload={"success": False})
 
-        with self._sessions_lock:
-            session = self._sessions.get(session_id)
+        session = self._session_table.get_by_id(session_id)
             
         if not session:
             logger.warning("[%s] No se encontró sesión para session_id %s", self.node_name, session_id)
@@ -167,8 +181,7 @@ class RoutingNode(LocationNode):
 
     def get_session_by_id(self, session_id: str) -> ClientSession | None:
         """Retorna la sesión correspondiente a session_id, o None si no existe"""
-        with self._sessions_lock:
-            return self._sessions.get(session_id)
+        return self._session_table.get_by_id(session_id)
 
     def get_processing_nodes(self) -> list:
         """Obtiene la lista de processing nodes disponibles"""
@@ -196,10 +209,122 @@ class RoutingNode(LocationNode):
         new_session = response.payload.get("session")
 
         if new_session is not None:
-            session.update_session(new_session)
+            changed = session.update_session(new_session)
+            if changed:
+                try:
+                    self.notify_local_change({"op": "add", "session": session.to_json()})
+                except Exception:
+                    logger.debug("[%s] notify_local_change failed on update", self.node_name)
 
         session.send_response(code, ftp_msg)
 
         return code == 221
+
+
+    # ----------------- Gossip / Session replication -----------------
+    def _export_sessions(self) -> list:
+        """Exporta todas las sesiones como lista de dicts."""
+        try:
+            return [s.to_json() for s in self._session_table.get_all_sessions()]
+        except Exception:
+            logger.exception("[%s] Error exporting sessions", self.node_name)
+            return []
+
+    def _import_sessions(self, sessions: list[dict]):
+        """Importa (merge) una lista de sesiones replicadas."""
+        if not sessions:
+            return
+        try:
+            for sdata in sessions:
+                try:
+                    s = ClientSession.from_json(sdata)
+                    self._session_table.add(s) 
+
+                except Exception:
+                    logger.debug("[%s] Failed importing session %s", self.node_name, sdata.get("session_id"))
+
+        except Exception:
+            logger.exception("[%s] Error importing sessions", self.node_name)
+
+    def _on_gossip_update(self, update: dict):
+        """Aplica cambios recibidos via gossip (add/delete)."""
+        op = update.get("op")
+        
+        if not op:
+            return
+
+        if op == "add":
+            session_data = update.get("session")
+            if not session_data:
+                return
+            try:
+                s = ClientSession.from_json(session_data)
+                self._session_table.add(s)
+            except Exception:
+                logger.exception("[%s] Error applying gossip add", self.node_name)
+
+        elif op == "delete":
+            sid = update.get("session_id")
+            if not sid:
+                return
+            try:
+                self._session_table.remove_by_id(sid)
+            except Exception:
+                logger.exception("[%s] Error applying gossip delete", self.node_name)
+
+    def _merge_state(self, peer_ip: str):
+        """Inicia merge bidireccional con peer_ip."""
+        
+        data = {"sessions": self._export_sessions()}
+        
+        msg = Message(MessageType.MERGE_STATE, self.ip, peer_ip, payload=data)
+        
+        try:
+            logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
+            
+            response = self.send_message(peer_ip, msg, await_response=True, timeout=30)
+            
+            if response and response.payload.get("sessions"):
+                self._import_sessions(response.payload.get("sessions"))
+        
+        except Exception:
+            logger.exception("[%s] Error durante MERGE_STATE con %s", self.node_name, peer_ip)
+
+    def _handle_merge_state(self, message: Message) -> Message:
+        try:
+            payload = message.payload or {}
+            sessions = payload.get("sessions", [])
+            self._import_sessions(sessions)
+
+            # Responder con nuestro estado
+            data = {"sessions": self._export_sessions()}
+            return Message(MessageType.MERGE_STATE_ACK, self.ip, message.header.get("src"), payload=data)
+        
+        except Exception:
+            logger.exception("[%s] Error en _handle_merge_state", self.node_name)
+            return Message(MessageType.MERGE_STATE_ACK, self.ip, message.header.get("src"), payload={})
+
+    def send_state(self, peer_ip: str):
+        """Envía el estado propio a otro nodo sin esperar respuesta."""
+
+        data = {"sessions": self._export_sessions()}
+        
+        msg = Message(MessageType.SEND_STATE, self.ip, peer_ip, payload=data)
+        try:
+            logger.info("[%s] Enviando SEND_STATE a %s", self.node_name, peer_ip)
+            self.send_message(peer_ip, msg, await_response=False)
+
+        except Exception:
+            logger.exception("[%s] Error enviando SEND_STATE a %s", self.node_name, peer_ip)
+
+    def handle_send_state(self, message: Message):
+        try:
+            payload = message.payload or {}
+            sessions = payload.get("sessions", [])
+            self._import_sessions(sessions)
+            logger.info("[%s] Estado actualizado desde SEND_STATE de %s", self.node_name, message.header.get("src"))
+        
+        except Exception:
+            logger.exception("[%s] Error en handle_send_state", self.node_name)
 
 
