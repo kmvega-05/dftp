@@ -11,7 +11,7 @@ class GossipNode(LocationNode):
     """Nodo que permite replicación gossip."""
 
     def __init__(self, node_name: str, ip: str, port: int,discovery_timeout: float = 0.8, heartbeat_interval: int = 5, node_role: NodeType = None, discovery_workers: int = 32):
-        super().__init__(node_name, ip , port, discovery_timeout, heartbeat_interval, node_role, discovery_workers)
+        super().__init__(node_name, ip, port, node_role=node_role, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval, discovery_workers=discovery_workers)
 
         # ---------------- Gossip state ----------------
         self.peers: dict[str, str] = {}
@@ -24,7 +24,7 @@ class GossipNode(LocationNode):
         # Handlers
         self.register_handler(MessageType.GOSSIP_UPDATE, self._handle_gossip_update)
         self.register_handler(MessageType.MERGE_STATE, self._handle_merge_state)
-        self.register_handler(MessageType.SEND_STATE, self.handle_send_state)
+        self.register_handler(MessageType.SEND_STATE, self._handle_send_state)
 
         # ---------------- Hilo actualización peers ----------------
         self.peers_update_thread = threading.Thread(target=self._update_peers, daemon=True)
@@ -46,7 +46,7 @@ class GossipNode(LocationNode):
     def _handle_merge_state(self, message: Message):
         raise NotImplementedError("_handle_merge_state must be implemented by subclass")
     
-    def handle_send_state(self, message: Message):
+    def _handle_send_state(self, message: Message):
         raise NotImplementedError("_handle_send_state must be implemented by subclass")
                         
     # ----------------- Hilo de actualización de peers -----------------
@@ -64,7 +64,38 @@ class GossipNode(LocationNode):
                 coordinador = min(current_peers)
 
                 with self.peers_lock:
+                    # Eliminar peers que ya no aparecen en el descubrimiento actual
+                    discovered_names = set()
+                    for p in discovered_peers:
+                        try:
+                            if not p:
+                                continue
+                            name = p.get("name")
+                            if name:
+                                discovered_names.add(name)
+                        except Exception:
+                            continue
+
+                    # Remover peers ausentes (posible caída o partición)
+                    removed = []
+                    for existing_name in list(self.peers.keys()):
+                        if existing_name not in discovered_names:
+                            # No eliminar nuestro propio nombre ni entradas vacías
+                            try:
+                                if existing_name == self.node_name:
+                                    continue
+                            except Exception:
+                                pass
+                            removed.append(existing_name)
+
+                    for r in removed:
+                        logger.info("[%s] Peer %s no responde en este ciclo: eliminando de peers", self.node_name, r)
+                        self.peers.pop(r, None)
+
+                    # Añadir nuevos peers descubiertos
                     for peer in discovered_peers:
+                        if not peer:
+                            continue
                         peer_name = peer.get("name")
                         peer_ip = peer.get("ip")
                         if not peer_name or not peer_ip or peer_name == self.node_name:
@@ -112,9 +143,9 @@ class GossipNode(LocationNode):
             try:
                 logger.info(f"Notificando cambio a {peer_ip} : {change}")
                 msg = Message(type=MessageType.GOSSIP_UPDATE, src=self.ip, dst=peer_ip ,payload=change)
-                self.send_message(peer_ip, msg, await_response=False)
+                self.send_message(peer_ip, 9000, msg, await_response=False)
             except Exception:
-                logger.debug("[%s] Error enviando gossip update a %s", self.node_name, peer_ip)
+                logger.info("[%s] Error enviando gossip update a %s", self.node_name, peer_ip)
 
     # ----------------- Handler de gossip -----------------
     def _handle_gossip_update(self, message: Message):
@@ -126,7 +157,7 @@ class GossipNode(LocationNode):
             with self.merging_lock:
                 self._on_gossip_update(change)
         except Exception as e:
-            logger.exception("[%s] Error manejando GOSSIP_UPDATE de %s: %s", self.node_name, message.src, e)
+            logger.exception("[%s] Error manejando GOSSIP_UPDATE de %s: %s", self.node_name, message.header.get('src'), e)
 
     # ----------------- Método para detener hilos -----------------
     def stop(self):

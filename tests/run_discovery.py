@@ -10,10 +10,10 @@ def main():
     parser.add_argument("--id", required=True, help="ID del DiscoveryNode")
     parser.add_argument("--ip", required=True, help="IP del nodo")
     parser.add_argument("--port", type=int, default=9000, help="Puerto de escucha")
-    parser.add_argument("--discovery-interval", type=int, default=10)
+    parser.add_argument("--discovery-interval", type=int, default=5)
     parser.add_argument("--discovery-timeout", type=float, default=0.8)
     parser.add_argument("--heartbeat-timeout", type=int, default=10)
-    parser.add_argument("--clean-interval", type=int, default=60)
+    parser.add_argument("--clean-interval", type=int, default=10)
     args = parser.parse_args()
 
     node = DiscoveryNode(node_name=args.id, ip=args.ip, port=args.port, discovery_interval=args.discovery_interval, discovery_timeout=args.discovery_timeout, heartbeat_timeout=args.heartbeat_timeout, clean_interval=args.clean_interval)

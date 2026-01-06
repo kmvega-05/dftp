@@ -20,6 +20,10 @@ def handle_pasv(cmd: Command, data: dict = None, processing_node=None) -> tuple[
     if not session.is_authenticated():
         return 530, "Not logged in.", None
 
+    if session.pasv_mode_enabled():
+        ip, port = session.get_pasv_mode_info()
+        return 227, f"Entering Passive Mode ({ip.replace('.',',')},{port//256},{port%256}).", session.to_json()
+
     data_nodes = processing_node.query_by_role(NodeType.DATA)
     if not data_nodes:
         logger.warning("No DataNodes available for PASV command")

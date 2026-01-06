@@ -23,12 +23,12 @@ def handle_rnto(cmd: Command, data: dict = None, processing_node=None) -> tuple[
     old_path = session.get_rename_from()
     new_path = cmd.get_arg(0)
 
-    if not old_path:
-        return 503, "Bad sequence of commands. Use RNFR first.", session.to_json()
+    if not old_path or old_path == "":
+        return 503, "Bad sequence of commands. Use RNFR first.", None
 
     data_nodes = processing_node.query_by_role(NodeType.DATA)
     if not data_nodes:
-        return 451, "Requested action aborted. File system unavailable.", session.to_json()
+        return 451, "Requested action aborted. File system unavailable.", None
 
     response = None
 

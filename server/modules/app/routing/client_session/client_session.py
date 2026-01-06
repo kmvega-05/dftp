@@ -92,7 +92,7 @@ class ClientSession:
         return self._rename_from_path
 
     def clear_rename_from(self) -> None:
-        self._rename_from_path = None
+        self._rename_from_path = ""
 
     # -------------------- Passive / Active mode --------------------
 
@@ -104,6 +104,9 @@ class ClientSession:
         self._pasv_mode = True
         self._data_ip = ip
         self._data_port = port
+
+    def pasv_mode_enabled(self) -> bool:
+        return self._pasv_mode
 
     def get_pasv_mode_info(self) -> Optional[tuple[str, int]]:
         """
@@ -149,7 +152,7 @@ class ClientSession:
             return
 
         try:
-            line = f"{code} {message}\r\n"
+            line = f"> {code} {message}\r\n"
             self._control_socket.sendall(line.encode("utf-8"))
             logger.info("Sent to %s: %s", self._client_ip, line.strip())
 

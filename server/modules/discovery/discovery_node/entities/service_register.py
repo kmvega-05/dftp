@@ -19,7 +19,7 @@ class ServiceRegister:
         . last_heartbeat : última señal enviada por el nodo
 
     """
-    def __init__(self, name: str, ip: str, node_role: NodeType, last_heartbeat : None):
+    def __init__(self, name: str, ip: str, node_role: NodeType, last_heartbeat = None):
         self.name = name
         self.ip = ip
         self.node_role = node_role

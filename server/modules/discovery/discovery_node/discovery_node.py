@@ -6,12 +6,10 @@ import os
 import logging
 
 from server.modules.discovery.discovery_node.entities import ServiceRegister, NodeType, RegisterTable
-from server.modules.comm import Message, MessageType
-from server.modules.consistency import GossipNode
-
+from server.modules.comm import Message, MessageType, CommunicationNode
 logger = logging.getLogger("dftp.app.discovery_node")
 
-class DiscoveryNode(GossipNode):
+class DiscoveryNode(CommunicationNode):
     """Discovery Node
     Nodo que gestiona una tabla de registros de servicios para que otros nodos puedan encontrarse entre ellos.
     La tabla contiene registros de los nodos del sistema incluyendo: Nombre, Ip, Rol, Last_Heartbeat
@@ -42,13 +40,9 @@ class DiscoveryNode(GossipNode):
     Para realizar una consulta a un Discovery Node enviar el Message correspondiente.
     """
 
-    def __init__(self, node_name: str, ip: str, port: int, heartbeat_timeout: int = 10, clean_interval: int = 60,
-        discovery_interval: int = 10, discovery_timeout: float = 0.8, discovery_workers: int = 32):
-        
-        # Iniciar CommunicationNode para permitir intercambio de mensajes.
+    def __init__(self, node_name: str, ip: str, port: int, heartbeat_timeout: int = 6, clean_interval: int = 3,
+        discovery_interval: int = 2, discovery_timeout: float = 0.8, discovery_workers: int = 32):
         super().__init__(node_name, ip, port)
-
-        self.node_type = NodeType.DISCOVERY
 
         # Tabla de servicios registrados
         self.register_table = RegisterTable()
@@ -71,6 +65,10 @@ class DiscoveryNode(GossipNode):
         self.discovery_workers = discovery_workers
         self.heartbeat_timeout = heartbeat_timeout
         self.clean_interval = clean_interval
+
+        self.node_role = NodeType.DISCOVERY
+
+    # (no replication locks needed: DiscoveryNodes don't replicate state entre sí)
 
         # Registar funciones para manejar distintos tipos de mensajes recibidos.
         self.register_handlers()
@@ -143,11 +141,6 @@ class DiscoveryNode(GossipNode):
             # Si el nodo ya estaba registrado, actualizar ip y heartbeat
             if existing:
                 existing.heartbeat(ip)
-                
-                with self.merging_lock:
-                    for peer_ip in self.peers.values():
-                        repl_msg = Message(MessageType.GOSSIP_UPDATE, self.ip, peer_ip, payload={"op": "add", "registry" : existing.to_dict()})
-                        self.send_message(peer_ip, 9000, repl_msg, await_response=False)
 
             # Si no, registrarlo
             else:
@@ -155,11 +148,6 @@ class DiscoveryNode(GossipNode):
                     sr = ServiceRegister(name, ip, node_role)
                     self.register_table.add_node(sr)
                     logger.info(f"New node registered: {name}, {str(node_role)} : ({ip})")
-                    
-                    with self.merging_lock:
-                        for peer_ip in self.peers.values():
-                            repl_msg = Message(MessageType.GOSSIP_UPDATE, self.ip, peer_ip, payload={"op": "add", "registry" : sr.to_dict()})
-                            self.send_message(peer_ip, 9000, repl_msg, await_response=False)
 
                 except Exception as e:
                     logger.exception("Error registrando nodo %s: %s", name, e)
@@ -210,7 +198,7 @@ class DiscoveryNode(GossipNode):
             payload = message.payload or {}
             role = payload.get("role")
 
-            logger.info(f"[{self.node_name}] : QUERY_BY_ROLE received from ({message.header.get('src')}) for {role}")
+            logger.debug(f"[{self.node_name}] : QUERY_BY_ROLE received from ({message.header.get('src')}) for {role}")
 
             if not role:
                 return Message(type=MessageType.DISCOVERY_QUERY_BY_ROLE_ACK, src=self.ip, dst=message.header.get("src"), payload={}, metadata={"status": "ERROR", "error_msg": "Missing role"})
@@ -228,7 +216,7 @@ class DiscoveryNode(GossipNode):
             # Preparar respuesta
             nodes_response = [ {"name": n.name, "ip": n.ip} for n in nodes ]
 
-            logger.info(f"[{self.node_name}] : QUERY_BY_ROLE returning : {nodes_response}")
+            logger.debug(f"[{self.node_name}] : QUERY_BY_ROLE returning : {nodes_response}")
 
             return Message(type=MessageType.DISCOVERY_QUERY_BY_ROLE_ACK, src=self.ip, dst=message.header.get("src"), payload={"nodes": nodes_response}, metadata={"status": "OK"})
 
@@ -250,6 +238,8 @@ class DiscoveryNode(GossipNode):
         except Exception as e:
             logger.exception("Error en query_all: %s", e)
             return Message(type=MessageType.DISCOVERY_QUERY_ALL_ACK, src=self.ip, dst=message.header.get("src"), payload={}, metadata={"status": "ERROR", "error_msg": str(e)})
+
+    # (replication/gossip removed) No handler for GOSSIP_UPDATE
 
     # ---------------- Background loops ----------------
     def _update_peers(self):
@@ -300,10 +290,6 @@ class DiscoveryNode(GossipNode):
                 for name in dead:
                     logger.info("%s: eliminando nodo inactivo %s", self.node_name, name)
                     n = self.register_table.remove_node(name)
-                    
-                    for peer_ip in self.peers.values():
-                        repl_msg = Message(MessageType.GOSSIP_UPDATE, self.ip, peer_ip, payload={"op": "delete", "registry": n.to_dict()})
-                        self.send_message(peer_ip, 9000, repl_msg, await_response=False)
             
             except Exception:
                 logger.exception("Error en clean_inactive_register_loop")
@@ -346,125 +332,18 @@ class DiscoveryNode(GossipNode):
         raise Exception("Invalid heartbeat response")
     
     def _update_peers_list(self, discovered_peers: dict):
-        """ Actualiza la lista de peers si hay cambios, 
-            .En caso de ser el coordinador(menor nombre) hace merge con uno de los nuevos nodos y
-            envia nuevo estado al resto de nodos.
-        """
-        current_peers = list(self.peers.keys())
-        current_peers.append(self.node_name)
-        coordinador = min(current_peers)
-        
+        """ Actualiza la lista de peers si hay cambios. No se realizan merges/replicaciones,
+            cada nodo se registra en todos los DiscoveryNodes así que el estado converge por inscripción directa."""
         new_peers = {}
         with self.peers_lock:
-            for peer_name in discovered_peers.keys():
-
+            for peer_name, peer_ip in discovered_peers.items():
                 if peer_name == self.node_name:
                     continue
-
-                if peer_name not in self.peers.keys():
-                    new_peers[peer_name] = discovered_peers[peer_name]
-                    self.peers[peer_name] = discovered_peers[peer_name]
+                if peer_name not in self.peers:
+                    new_peers[peer_name] = peer_ip
+                # actualizar o añadir
+                self.peers[peer_name] = peer_ip
 
         if new_peers:
             logger.info("[%s] Nuevos peers descubiertos: %s", self.node_name, list(new_peers.keys()))
 
-            if self.node_name == coordinador:
-                # Elegir un único nodo nuevo para merge
-                nodo_merge = min([p["name"] for p in new_peers])
-                peer_ip = next(p["ip"] for p in new_peers if p["name"] == nodo_merge)
-
-                # Merge lo inicia el nodo con menor nombre entre coordinador y nodo_merge
-                if self.node_name < nodo_merge:
-                    try:
-                        with self.merging_lock:
-                            logger.info("[%s] Merge de estado con peer %s (%s)", self.node_name, nodo_merge, peer_ip)
-                            self._merge_state(peer_ip)
-
-                            # Enviar el estado al resto de nodos
-                            for dst_ip in self.peers.values():
-
-                                if dst_ip == peer_ip:
-                                    continue 
-
-                                self.send_state(dst_ip)
-
-                    except Exception:
-                        logger.exception("[%s] Error durante merge con peer %s", self.node_name, nodo_merge)
-
-    # Gossip Methods
-    def _on_gossip_update(self, update : dict):
-        op = update.get("op")
-        registry = ServiceRegister.from_dict(update.get("registry"))
-
-        if not op or not registry:
-            return
-
-        if op == 'add':
-            self.register_table.add_node(registry)
-
-        elif op == 'delete':
-            self.register_table.remove_node(registry.name)
-
-    def _merge_state(self, peer_ip):
-        data = self._export_register_table()
-
-        merge_msg = Message(MessageType.MERGE_STATE, self.ip, peer_ip, payload={"nodes": data})
-
-        try:
-            logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
-            response = self.send_message(peer_ip, 9000, merge_msg, await_response=True)
-
-            if response and response.payload.get("nodes"):
-                self._import_register_table(response.payload["nodes"])
-
-        except Exception as e:
-            logger.exception("[%s] Error durante MERGE_STATE con %s: %s", self.node_name, peer_ip, e)
-
-    def _handle_merge_state(self, message):
-        try:
-            payload = message.payload or {}
-            nodes_data = payload.get("nodes", [])
-
-            self._import_register_table(nodes_data)
-
-            data = self._export_register_table()
-
-            return Message(MessageType.MERGE_STATE_ACK, self.ip, message.header.get("src"), payload={"nodes": data})
-
-        except Exception as e:
-            logger.exception("Error en _handle_merge_state: %s", e)
-            return Message(MessageType.MERGE_STATE_ACK, self.ip, message.header.get("src"), payload={})
-
-    def send_state(self, peer_ip):
-        data = self._export_register_table()
-
-        msg = Message(MessageType.SEND_STATE, self.ip, peer_ip, payload={"nodes": data})
-
-        try:
-            logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
-            self.send_message(peer_ip, 9000, msg, await_response=False)
-
-        except Exception as e:
-            logger.exception("[%s] Error durante SEND_STATE con %s: %s", self.node_name, peer_ip, e)
-
-    def handle_send_state(self, message):
-        try:
-            payload = message.payload or {}
-            nodes_data = payload.get("nodes", [])
-
-            self._import_register_table(nodes_data)
-
-        except Exception as e:
-            logger.exception("Error en _handle_send_state: %s", e)
-
-
-    def _export_register_table(self):
-        return [n.to_dict() for n in self.register_table.get_all_nodes()]
-
-    def _import_register_table(self, nodes:list[dict]):
-        for data in nodes:
-            try:
-                node = ServiceRegister.from_dict(data)
-                self.register_table.add_node(node)
-            except Exception:
-                logger.exception("[%s] Error importing node %s", self.node_name, data)
