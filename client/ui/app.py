@@ -11,6 +11,7 @@ from datetime import datetime
 import threading
 import time
 import traceback
+import logging
 
 from core.connection import ControlConnectionManager
 from core.parser import Parser
@@ -18,6 +19,13 @@ from core.commands import ClientCommandHandler
 from levenstein import get_suggestion
 
 import streamlit as st
+
+# Configure logging for Streamlit app
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 st.set_page_config(page_title="dFTP Client UI", layout="wide")
@@ -52,17 +60,23 @@ with st.sidebar:
     timeout = st.number_input("Timeout (s)", min_value=1.0, max_value=60.0, value=10.0)
     if st.button("Connect"):
         try:
+            logger.info(f"[UI] Connect button clicked: {host}:{port}")
             conn = make_conn(host, int(port), float(timeout))
+            logger.info(f"[UI] Connecting to {host}:{port}...")
             conn.connect()
             st.session_state["conn"] = conn
+            logger.info(f"[UI] Connection successful")
             handler = ClientCommandHandler(conn, Parser())
             st.session_state["handler"] = handler
             # Read and record the server banner (welcome message) immediately
             try:
+                logger.debug("[UI] Reading server banner")
                 banner = handler.read_banner()
                 if banner:
+                    logger.info(f"[UI] Banner received: {banner.code} - {banner.message}")
                     st.info(f"{banner.code} — {banner.message}")
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[UI] Banner read error: {e}")
                 # ignore banner read errors
                 pass
             # record successful connect in history
@@ -75,6 +89,7 @@ with st.sidebar:
             })
             st.success(f"Connected to {host}:{port}")
         except Exception as e:
+            logger.error(f"[UI] Connection failed: {e}")
             st.session_state["conn"] = None
             st.session_state["handler"] = None
             # put connection failure into a small temp history in session
@@ -89,9 +104,11 @@ with st.sidebar:
             st.session_state["tmp_history"] = tmp
             st.error(f"Connection failed: {e}")
     if st.button("Disconnect"):
+        logger.info("[UI] Disconnect button clicked")
         conn = st.session_state.get("conn")
         if conn:
             try:
+                logger.debug("[UI] Disconnecting...")
                 conn.disconnect()
                 handler = st.session_state.get("handler")
                 if handler:
@@ -104,8 +121,10 @@ with st.sidebar:
                     })
                 st.session_state["conn"] = None
                 st.session_state["handler"] = None
+                logger.info("[UI] Disconnect successful")
                 st.info("Disconnected")
             except Exception as e:
+                logger.error(f"[UI] Error disconnecting: {e}")
                 st.error(f"Error disconnecting: {e}")
 
 
@@ -126,8 +145,10 @@ with col1:
 
     # A simple area to show last output
     if cmd_run and cmd:
+        logger.info(f"[UI] Command executed: {cmd}")
         handler: ClientCommandHandler = st.session_state.get("handler")
         if not handler:
+            logger.warning("[UI] Not connected")
             st.error("Not connected. Connect first.")
         else:
             try:
@@ -135,13 +156,16 @@ with col1:
                 verb = parts[0].lower()
                 # Handle commands that require additional UI inputs
                 if verb == "stor":
+                    logger.info("[UI] STOR command handler")
                     # expect optional: STOR remote_name
                     remote = parts[1] if len(parts) > 1 else None
                     if uploaded_file is None:
+                        logger.warning("[UI] No file uploaded for STOR")
                         st.error("Select a file to upload using the uploader above.")
                     else:
                         # save to a temporary path
                         local_path = f"/tmp/streamlit_upload_{int(time.time())}_{uploaded_file.name}"
+                        logger.debug(f"[UI] STOR temp file: {local_path}")
                         with open(local_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
                         # run stor in a thread to avoid blocking
@@ -159,9 +183,11 @@ with col1:
                             # ensure progress shows complete when done
                             p.progress(100)
                         if result["error"]:
+                            logger.error(f"[UI] STOR error: {result['error']}")
                             st.error(f"Error: {result['error']}")
                         else:
                             out = result["value"]
+                            logger.info(f"[UI] STOR completed: {out}")
                             # Expecting (remote_filename, parsed)
                             if isinstance(out, tuple) and len(out) == 2:
                                 filename, parsed = out
@@ -181,11 +207,14 @@ with col1:
                             else:
                                 st.success(f"STOR finished: {out}")
                 elif verb == "retr":
+                    logger.info("[UI] RETR command handler")
                     if len(parts) < 2:
+                        logger.error("[UI] Invalid RETR syntax")
                         st.error("Usage: RETR remote_filename [local_path]")
                     else:
                         remote = parts[1]
                         local = parts[2] if len(parts) > 2 else f"/tmp/{remote}"
+                        logger.debug(f"[UI] RETR: {remote} -> {local}")
                         t, result = run_in_thread(handler._retr, remote, local)
                         with st.spinner("Downloading..."):
                             p = st.progress(0)
@@ -195,9 +224,11 @@ with col1:
                                 i = min(100, i+5)
                                 p.progress(i)
                         if result["error"]:
+                            logger.error(f"[UI] RETR error: {result['error']}")
                             st.error(f"Error: {result['error']}")
                         else:
                             out = result["value"]
+                            logger.info(f"[UI] RETR completed: {out}")
                             # Expecting (local_path, parsed)
                             if isinstance(out, tuple) and len(out) == 2:
                                 local_path, parsed = out
@@ -216,6 +247,7 @@ with col1:
                             else:
                                 st.success(f"RETR finished: {out}")
                 elif verb in ("list", "nlst"):
+                    logger.info(f"[UI] {verb.upper()} command handler")
                     if verb == "list":
                         t, result = run_in_thread(handler._list, "")
                     else:
@@ -224,9 +256,11 @@ with col1:
                         while t.is_alive():
                             time.sleep(0.05)
                     if result["error"]:
+                        logger.error(f"[UI] {verb.upper()} error: {result['error']}")
                         st.error(f"Error: {result['error']}")
                     else:
                         val = result["value"]
+                        logger.debug(f"[UI] {verb.upper()} result received")
                         # When handler._list returns (listing, parsed)
                         if isinstance(val, tuple) and len(val) == 2:
                             listing, parsed = val
@@ -245,29 +279,35 @@ with col1:
                         else:
                             st.write(val)
                 else:
+                    logger.info(f"[UI] Generic command handler for: {verb}")
                     # default: run _execute via mapping
                     # try to call a corresponding method on handler
                     method_name = f"_{verb}"
                     method = getattr(handler, method_name, None)
                     if method is None:
+                        logger.warning(f"[UI] Unknown command: {verb}")
                         st.error(f"Unknown command: {verb}")
                         st.write(f"Try with {get_suggestion(verb)}")
                     else:
                         args = parts[1:]
+                        logger.debug(f"[UI] Calling {method_name} with args: {args}")
                         t, result = run_in_thread(method, *args)
                         with st.spinner("Running..."):
                             while t.is_alive():
                                 time.sleep(0.05)
                         if result["error"]:
+                            logger.error(f"[UI] Command error: {result['error']}")
                             st.error(f"Error: {result['error']}")
                         else:
                             out = result["value"]
+                            logger.debug(f"[UI] Command result: {out}")
                             # parsed MessageStructure
                             if hasattr(out, "code"):
                                 st.write(f"{out.code} — {out.message}")
                             else:
                                 st.write(out)
             except Exception as e:
+                logger.error(f"[UI] Unhandled exception: {traceback.format_exc()}")
                 st.error(f"Unhandled exception:\n{traceback.format_exc()}")
 
 with col2:
