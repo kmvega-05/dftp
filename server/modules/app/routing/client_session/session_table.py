@@ -67,3 +67,7 @@ class SessionTable:
         with self._lock:
             return list(self._by_id.values())
 
+    def __str__(self) -> str:
+        with self._lock:
+            return f"SessionTable(by_id={list(self._by_id.keys())}, by_ip={self._by_ip})"
+

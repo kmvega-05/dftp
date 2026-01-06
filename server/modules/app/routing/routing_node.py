@@ -29,11 +29,11 @@ class RoutingNode(GossipNode):
     """
 
     def __init__(self, node_name: str, ip: str, ftp_port: int = 21, internal_port: int = 9000, discovery_timeout: float = 0.8, heartbeat_interval: int = 2):
-        # Inicializar GossipNode para permitir replicación de estado entre routing nodes
-        super().__init__(node_name=node_name, ip=ip, port=internal_port, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval, node_role=NodeType.ROUTING)
-
-        self.ftp_port = ftp_port
+        # Inicializar GossipNode para permitir replicación de estado entre routing nodes   
         self._session_table = SessionTable()
+        self.ftp_port = ftp_port
+        
+        super().__init__(node_name=node_name, ip=ip, port=internal_port, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval, node_role=NodeType.ROUTING)
 
         self.register_handler(MessageType.DATA_READY, self._handle_data_ready)
         self._start_ftp_listener()
@@ -248,6 +248,8 @@ class RoutingNode(GossipNode):
 
     def _on_gossip_update(self, update: dict):
         """Aplica cambios recibidos via gossip (add/delete)."""
+        logger.info("[%s] Received gossip update: %s", self.node_name, update)
+
         op = update.get("op")
         
         if not op:
@@ -271,10 +273,13 @@ class RoutingNode(GossipNode):
                 self._session_table.remove_by_id(sid)
             except Exception:
                 logger.exception("[%s] Error applying gossip delete", self.node_name)
+        
+        logger.info("[%s] Applied gossip update: %s", self.node_name, op)
+        logger.info("[%s] Current sessions: %s", self.node_name, self._session_table)
 
     def _merge_state(self, peer_ip: str):
         """Inicia merge bidireccional con peer_ip."""
-        
+
         data = {"sessions": self._export_sessions()}
         
         msg = Message(MessageType.MERGE_STATE, self.ip, peer_ip, payload=data)
@@ -282,7 +287,9 @@ class RoutingNode(GossipNode):
         try:
             logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
             
-            response = self.send_message(peer_ip, msg, await_response=True, timeout=30)
+            response = self.send_message(peer_ip, 9000, msg, await_response=True, timeout=30)
+
+            logger.info("[%s] Recibiendo respuesta de MERGE_STATE de %s", self.node_name, peer_ip)
             
             if response and response.payload.get("sessions"):
                 self._import_sessions(response.payload.get("sessions"))
@@ -290,19 +297,26 @@ class RoutingNode(GossipNode):
         except Exception:
             logger.exception("[%s] Error durante MERGE_STATE con %s", self.node_name, peer_ip)
 
+        logger.info("[%s] Merge de estado completado con %s", self.node_name, peer_ip)
+
     def _handle_merge_state(self, message: Message) -> Message:
         try:
+            logger.info("[%s] Recibiendo MERGE_STATE de %s", self.node_name, message.header.get("src"))
             payload = message.payload or {}
             sessions = payload.get("sessions", [])
             self._import_sessions(sessions)
 
             # Responder con nuestro estado
             data = {"sessions": self._export_sessions()}
+            logger.info("[%s] Enviando MERGE_STATE_ACK a %s", self.node_name, message.header.get("src"))
+
+            logger.info("[%s] Current sessions after MERGE_STATE: %s", self.node_name, self._session_table)
             return Message(MessageType.MERGE_STATE_ACK, self.ip, message.header.get("src"), payload=data)
         
         except Exception:
             logger.exception("[%s] Error en _handle_merge_state", self.node_name)
             return Message(MessageType.MERGE_STATE_ACK, self.ip, message.header.get("src"), payload={})
+            
 
     def send_state(self, peer_ip: str):
         """Envía el estado propio a otro nodo sin esperar respuesta."""
@@ -312,12 +326,12 @@ class RoutingNode(GossipNode):
         msg = Message(MessageType.SEND_STATE, self.ip, peer_ip, payload=data)
         try:
             logger.info("[%s] Enviando SEND_STATE a %s", self.node_name, peer_ip)
-            self.send_message(peer_ip, msg, await_response=False)
+            self.send_message(peer_ip, 9000, msg, await_response=False)
 
         except Exception:
             logger.exception("[%s] Error enviando SEND_STATE a %s", self.node_name, peer_ip)
 
-    def handle_send_state(self, message: Message):
+    def _handle_send_state(self, message: Message):
         try:
             payload = message.payload or {}
             sessions = payload.get("sessions", [])
@@ -325,6 +339,8 @@ class RoutingNode(GossipNode):
             logger.info("[%s] Estado actualizado desde SEND_STATE de %s", self.node_name, message.header.get("src"))
         
         except Exception:
-            logger.exception("[%s] Error en handle_send_state", self.node_name)
+            logger.exception("[%s] Error en _handle_send_state", self.node_name)
+
+        logger.info("[%s] Current sessions after SEND_STATE: %s", self.node_name, self._session_table)
 
 

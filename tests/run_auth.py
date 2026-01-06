@@ -1,6 +1,6 @@
 import argparse
 import logging
-
+import os
 from server.modules.app import AuthNode
 
 logging.basicConfig(level=logging.INFO)
@@ -12,16 +12,20 @@ def main():
     parser.add_argument("--port", type=int, default=9000, help="Puerto de escucha")
     parser.add_argument("--discovery-timeout", type=float, default=0.8, help="Timeout de discovery")
     parser.add_argument("--heartbeat-interval", type=int, default=2, help="Intervalo de heartbeat")
+    parser.add_argument("--subnet", default=None, help='Subnet del sistema')
     args = parser.parse_args()
 
     node_name = args.id
     ip = args.ip
     port = args.port
 
+    if args.subnet:
+        os.environ['DFTP_SUBNET'] = args.subnet
+
     print(f"[INFO] Iniciando AuthNode '{node_name}' en {ip}:{port}")
 
     node = AuthNode(node_name=node_name, ip=ip, port=port, discovery_timeout=args.discovery_timeout, heartbeat_interval=args.heartbeat_interval)
-
+    
     # Mantener el nodo corriendo
     try:
         while True:

@@ -24,7 +24,7 @@ class DataNode(LocationNode):
     """
     def __init__(self, node_name: str, ip: str, port: int, fs_root : str, discovery_timeout : float = 0.8, heartbeat_interval: int = 2):
 
-        super().__init__(node_name, ip, port, NodeType.DATA, discovery_timeout, heartbeat_interval)
+        super().__init__(node_name=node_name, ip=ip, port=port, node_role=NodeType.DATA, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval)
 
         self.fs = FileSystemManager(fs_root)
 
@@ -55,6 +55,7 @@ class DataNode(LocationNode):
         self.register_handler(MessageType.DATA_REPLICATE_READY, self._handle_replicate_ready)
 
     def _handle_cwd(self, message: Message):
+        logger.info("[%s] Received DATA_CWD from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         user = message.payload.get("user")
         current_path = message.payload.get("current_path")
         new_path = message.payload.get("new_path")
@@ -65,6 +66,7 @@ class DataNode(LocationNode):
         try:
             namespace = self.fs.get_namespace(user)
             virtual, _ = self.fs.validate_path(namespace, current_path, new_path, want="dir")
+            logger.info("[%s] DATA_CWD success for %s -> %s", self.node_name, user, virtual)
             return Message(MessageType.DATA_CWD_ACK, self.ip, message.header.get("src"), payload={"cwd": virtual}, metadata={"status": "OK"})
 
         except FileNotFoundError:
@@ -82,6 +84,7 @@ class DataNode(LocationNode):
 
 
     def _handle_mkd(self, message: Message):
+        logger.info("[%s] Received DATA_MKD from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         user = message.payload.get("user")
         path = message.payload.get("path")
         cwd = message.payload.get("cwd", "/")
@@ -91,7 +94,9 @@ class DataNode(LocationNode):
 
         try:
             namespace = self.fs.get_namespace(user)
+            logger.info("[%s] Creating directory for %s: %s/%s", self.node_name, user, cwd, path)
             self.fs.make_dir(namespace, cwd, path)
+            logger.info("[%s] DATA_MKD success for %s: %s/%s", self.node_name, user, cwd, path)
             return Message(MessageType.DATA_MKD_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
         except FileExistsError:
@@ -105,6 +110,7 @@ class DataNode(LocationNode):
             return Message(MessageType.DATA_MKD_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": str(e)})
 
     def _handle_remove(self, message: Message):
+        logger.info("[%s] Received DATA_REMOVE from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         user = message.payload.get("user")
         path = message.payload.get("path")
         cwd = message.payload.get("cwd", "/")
@@ -121,6 +127,7 @@ class DataNode(LocationNode):
                 self.fs.remove_dir(namespace, cwd, path)
 
             virtual_path = self.fs.normalize_virtual_path(cwd, path)
+            logger.info("[%s] DATA_REMOVE success for %s: %s", self.node_name, user, virtual_path)
             return Message(MessageType.DATA_REMOVE_ACK, self.ip, message.header.get("src"), payload={"path": virtual_path}, metadata={"status": "OK"})
 
         except FileNotFoundError:
@@ -138,6 +145,7 @@ class DataNode(LocationNode):
 
 
     def _handle_rename(self, message: Message):
+        logger.info("[%s] Received DATA_RENAME from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         user = message.payload.get("user")
         cwd = message.payload.get("cwd")
         old_path = message.payload.get("old_path")
@@ -148,7 +156,9 @@ class DataNode(LocationNode):
 
         try:
             root_dir = self.fs.get_namespace(user)
+            logger.info("[%s] Renaming %s:%s -> %s", self.node_name, user, old_path, new_path)
             self.fs.rename_path(root_dir, cwd, old_path, new_path)
+            logger.info("[%s] DATA_RENAME success for %s: %s -> %s", self.node_name, user, old_path, new_path)
             return Message(MessageType.DATA_RENAME_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
         except Exception as e:
@@ -156,6 +166,7 @@ class DataNode(LocationNode):
             return Message(MessageType.DATA_RENAME_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": str(e)})
 
     def _handle_stat(self, message: Message) -> Message:
+        logger.info("[%s] Received DATA_STAT from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         user = message.payload.get("user")
         cwd = message.payload.get("cwd")
         path = message.payload.get("path")
@@ -170,6 +181,7 @@ class DataNode(LocationNode):
             if stat is None:
                 raise FileNotFoundError("Path not found")
 
+            logger.info("[%s] DATA_STAT found for %s: %s -> %s", self.node_name, user, path, stat)
             return Message(MessageType.DATA_STAT_ACK, self.ip, message.header.get("src"), payload={"stat": stat}, metadata={"status": "OK"})
 
         except Exception as e:
@@ -178,6 +190,7 @@ class DataNode(LocationNode):
 
 
     def _handle_open_pasv(self, message: Message):
+        logger.info("[%s] Received DATA_OPEN_PASV from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         session_id = message.payload.get("session_id")
 
         if session_id is None:
@@ -186,6 +199,7 @@ class DataNode(LocationNode):
         sock = None
         try:
             sock, ip, port = self._open_pasv_socket()
+            logger.info("[%s] Opened PASV socket for session %s on %s:%s", self.node_name, session_id, ip, port)
         except Exception:
             logger.exception("Unable to open PASV socket")
             self._try_close_socket(sock)
@@ -197,6 +211,7 @@ class DataNode(LocationNode):
                 self._try_close_socket(old_sock)
             self._pasv_sockets[session_id] = sock
 
+        logger.info("[%s] DATA_OPEN_PASV_ACK sent for session %s -> %s:%s", self.node_name, session_id, ip, port)
         return Message(MessageType.DATA_OPEN_PASV_ACK, self.ip, message.header.get("src"), payload={"ip": ip, "port": port}, metadata={"status": "OK"})
 
     def _open_pasv_socket(self) -> tuple[socket.socket, str, int]:
@@ -228,6 +243,8 @@ class DataNode(LocationNode):
         if not session_id or not user:
             return Message(MessageType.DATA_LIST_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "Missing arguments"})
 
+        logger.info("[%s] Received DATA_LIST from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
+        
         # Obtener socket pasivo perteneciente a la sesion
         sock = self._consume_pasv_socket(session_id)
         if not sock:
@@ -248,15 +265,11 @@ class DataNode(LocationNode):
 
             # Hacer que se envie '150 Data Connection Ready' al cliente
             ready_msg = Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id})
-            
-            logger.info("Sending DATA READY message to Processing Node")
-            
+            logger.info("[%s] Sending DATA_READY to %s for session %s", self.node_name, message.header.get("src"), session_id)
             ack = self.send_message(message.header.get("src"), 9000, ready_msg, await_response=True, timeout=30)
-            
-            logger.info("RECEIVED : %s", ack)
-            
+            logger.info("[%s] Received ack for DATA_READY: %s", self.node_name, ack)
             if not ack or not ack.payload.get("success"):
-                logger.info("Sending : 'Unable to prepare data conection.'")
+                logger.info("[%s] Unable to prepare data connection on processing node %s", self.node_name, message.header.get("src"))
                 return Message(MessageType.DATA_LIST_ACK, self.ip, message.header.get("src"), payload={}, metadata = {"status": "error", "message": "Unable to prepare data conection."})
 
             logger.info("Sending List DATA to %s", data_addr)
@@ -265,12 +278,12 @@ class DataNode(LocationNode):
                 line = f"{entry}\r\n"
                 data_conn.sendall(line.encode())
 
-            logger.info("Data sent.")
+            logger.info("[%s] Data sent for LIST session %s", self.node_name, session_id)
 
             if data_conn:
                 data_conn.close()
             
-            logger.info("LIST Exitoso")
+            logger.info("[%s] LIST successful for session %s", self.node_name, session_id)
             return Message(MessageType.DATA_LIST_ACK, self.ip, message.header.get("src"), payload={}, metadata = {"status": "OK"})
 
         except Exception as e:
@@ -284,6 +297,7 @@ class DataNode(LocationNode):
                 pass
 
     def _handle_retr(self, message: Message):
+        logger.info("[%s] Received DATA_RETR_FILE from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         session_id = message.payload.get("session_id")
         user = message.payload.get("user")
         cwd = message.payload.get("cwd")
@@ -302,28 +316,32 @@ class DataNode(LocationNode):
             generator = self.fs.read_stream(namespace, cwd, path, chunk_size=chunk_size)
 
             # Avisamos al routing node que ya puede enviar el 150 al cliente
+            logger.info("[%s] Notifying processing node %s DATA_READY for session %s", self.node_name, message.header.get("src"), session_id)
             self.send_message(message.header.get("src"), 9000, Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id}))
 
             conn, addr = sock.accept()
-            logger.info("Sending file...")
+            logger.info("[%s] Sending file for session %s...", self.node_name, session_id)
             with conn:
                 for chunk in generator:
                     conn.sendall(chunk)
-            logger.info("File sent")
+            logger.info("[%s] File sent for session %s", self.node_name, session_id)
 
         except Exception as e:
             logger.exception(str(e))
             return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": str(e)})
+        
         finally:
             try:
                 sock.close()
             except:
                 pass
-        logger.info("RETR exitoso")
+            
+        logger.info("[%s] RETR successful for session %s", self.node_name, session_id)
         return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
     
     def _handle_store(self, message: Message):
+        logger.info("[%s] Received DATA_STORE_FILE from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         session_id = message.payload.get("session_id")
         user = message.payload.get("user")
         cwd = message.payload.get("cwd")
@@ -345,6 +363,7 @@ class DataNode(LocationNode):
             namespace = self.fs.get_namespace(user)
 
             # Avisamos al routing node que puede enviar el 150
+            logger.info("[%s] Notifying processing node %s DATA_READY for session %s", self.node_name, message.header.get("src"), session_id)
             self.send_message(message.header.get("src"), 9000,Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id}))
 
             # Guardar archivo localmente
@@ -357,6 +376,7 @@ class DataNode(LocationNode):
                             break
                         yield chunk
 
+                logger.info("[%s] Receiving and writing file %s for user %s", self.node_name, path, user)
                 self.fs.write_stream(namespace, cwd, path, data_gen(), chunk_size=chunk_size)
 
             virtual_path = self.fs.normalize_virtual_path(cwd, path)
@@ -364,12 +384,14 @@ class DataNode(LocationNode):
             # Crear y guardar metadata local
             file_metadata = FileMetadata(filename=virtual_path, version=version, transfer_id=transfer_id, timestamp=time.time())
             self.metadata_table.upsert(file_metadata)
+            logger.info("[%s] Stored file %s and updated metadata", self.node_name, virtual_path)
 
             # Replicar en paralelo
             ack_counter = [0]  # lista para mutabilidad en threads
             ack_lock = threading.Lock()
             ack_event = threading.Event()
 
+            logger.info("[%s] Starting replication to %s peers for %s", self.node_name, len(replicate_to), virtual_path)
             threads = [
                 threading.Thread(target=self._replicate_to_node,
                     args=(ip, file_metadata, path, user, cwd, ack_counter, ack_lock, ack_event, len(replicate_to)))
@@ -386,6 +408,7 @@ class DataNode(LocationNode):
 
             # 5️⃣ Retornamos respuesta al cliente
             status = "OK" if ack_counter[0] >= min(K_REPLICAS, len(replicate_to)) else "partial"
+            logger.info("[%s] Replication finished for %s, acks_received=%s", self.node_name, virtual_path, ack_counter[0])
 
             return Message(MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": status, "acks_received": ack_counter[0]})
 
@@ -404,6 +427,7 @@ class DataNode(LocationNode):
         payload = message.payload or {}
         filename = payload.get("filename")
 
+        logger.info("[%s] Received DATA_META_REQUEST from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         try:
             if filename:
                 meta = self.metadata_table.get(filename)
@@ -425,6 +449,8 @@ class DataNode(LocationNode):
         cwd = payload.get("cwd")
         chunk_size = payload.get("chunk_size", 65536)
 
+        logger.info("[%s] Received DATA_REPLICATE_FILE from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
+        
         if not filename or not metadata_dict or not user or cwd is None:
             return Message(MessageType.DATA_REPLICATE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "Missing required fields (filename, metadata, user, cwd)"})
 
@@ -441,6 +467,7 @@ class DataNode(LocationNode):
 
             # Responder inmediatamente con IP/puerto y info del archivo
             ready_msg = Message(type=MessageType.DATA_REPLICATE_READY, src=self.ip, dst=message.header.get("src"), payload={"ip": listen_ip, "port": listen_port, "filename": filename, "user": user, "cwd": cwd})
+            logger.info("[%s] Sending DATA_REPLICATE_READY to %s -> %s:%s", self.node_name, message.header.get("src"), listen_ip, listen_port)
             self.send_message(message.header.get("src"), 9000, ready_msg, await_response=False)
 
             # Esperar conexión del nodo que enviará el archivo
@@ -459,7 +486,7 @@ class DataNode(LocationNode):
 
             # Actualizar metadata
             self.metadata_table.upsert(file_metadata)
-
+            logger.info("[%s] Replicated file stored: %s for user %s", self.node_name, filename, user)
             return Message(MessageType.DATA_REPLICATE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
         except Exception as e:
@@ -485,6 +512,8 @@ class DataNode(LocationNode):
         user = payload.get("user")
         cwd = payload.get("cwd")
 
+        logger.info("[%s] Received DATA_REPLICATE_READY from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
+        
         if not all([ip, port, filename, user, cwd]):
             logger.error("Missing required fields in DATA_REPLICATE_READY")
             return  # Mensaje de control, no return de respuesta
@@ -493,6 +522,8 @@ class DataNode(LocationNode):
             # Determinar la ruta real y generar stream del archivo
             namespace = self.fs.get_namespace(user)
 
+            logger.info("[%s] Connecting to %s:%s to send file %s", self.node_name, ip, port, filename)
+            
             # Generador de chunks
             chunk_gen = self.fs.read_stream(namespace, cwd, filename)
 
@@ -503,28 +534,34 @@ class DataNode(LocationNode):
                 for chunk in chunk_gen:
                     sock.sendall(chunk)
 
-            logger.info("File '%s' sent successfully to %s:%s", filename, ip, port)
+            logger.info("[%s] File '%s' sent successfully to %s:%s", self.node_name, filename, ip, port)
 
         except Exception as e:
-            logger.exception("Error replicating file '%s' to %s:%s", filename, ip, port)
+            logger.exception("[%s] Error replicating file '%s' to %s:%s: %s", self.node_name, filename, ip, port, e)
 
     def _replicate_to_node(self, target_ip: str, file_metadata: FileMetadata, path: str, user: str, cwd: str, ack_counter: list, ack_lock: threading.Lock, ack_event: threading.Event, total_peers : int):
         """
         Envía DATA_REPLICATE_FILE a un nodo objetivo y actualiza contador de acks.
         """
         try:
+            logger.info("[%s] Sending DATA_REPLICATE_FILE to %s for %s", self.node_name, target_ip, path)
             replicate_msg = Message(type=MessageType.DATA_REPLICATE_FILE, src=self.ip, dst=target_ip, payload={"filename": path, "metadata": file_metadata.to_dict(), "user": user, "cwd": cwd})
             ack = self.send_message(target_ip, 9000, replicate_msg, await_response=True)  # sin timeout global
+            logger.info("[%s] Received replicate ack from %s: %s", self.node_name, target_ip, ack)
             if ack and ack.metadata.get("status") == "OK":
                 with ack_lock:
                     ack_counter[0] += 1
+                    logger.info("[%s] Ack counter incremented: %s", self.node_name, ack_counter[0])
                     if ack_counter[0] >= min(K_REPLICAS, total_peers):
                         ack_event.set()
-        except Exception:
+        
+        except Exception as e:
+            logger.exception("[%s] Error sending replicate to %s: %s", self.node_name, target_ip, e)
             # ignoramos errores de nodos individuales
             pass
 
     def _handle_rename_file(self, message: Message):
+        logger.info("[%s] Received RENAME_FILE from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         payload = message.payload or {}
         filename = payload.get("filename")
         user = payload.get("user")

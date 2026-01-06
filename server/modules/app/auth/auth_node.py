@@ -17,10 +17,10 @@ class AuthNode(GossipNode):
 
     def __init__(self, node_name: str, ip: str, port: int, discovery_timeout: float = 0.8, heartbeat_interval: int = 2, discovery_workers: int = 32):
         
-        super().__init__(node_name, ip, port, discovery_timeout, heartbeat_interval, NodeType.AUTH, discovery_workers)
-
         self._users_lock = threading.Lock()
         self._ensure_users_file()
+
+        super().__init__(node_name=node_name, ip=ip, port=port, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval, node_role=NodeType.AUTH, discovery_workers=discovery_workers)
 
         # Registrar handlers de autenticación
         self.register_handler(MessageType.AUTH_VALIDATE_USER, self._handle_validate_user)
@@ -46,7 +46,7 @@ class AuthNode(GossipNode):
 
     # -------------------- Acceso a usuarios --------------------
     def get_users_file_path(self) -> str:
-        return os.path.join(os.path.dirname(__file__), '..', 'data', 'users.json')
+        return os.path.join(os.path.dirname(__file__),'data', 'users.json')
 
     def get_user_by_name(self, username: str) -> dict | None:
         with self._users_lock:
@@ -138,12 +138,16 @@ class AuthNode(GossipNode):
         try:
             logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
             # Esperar respuesta con estado del peer
-            response = self.send_message(peer_ip, msg, await_response=True, timeout=30)
+            response = self.send_message(peer_ip, 9000, msg, await_response=True, timeout=30)
+
+            logger.info("[%s] Recibido MERGE_STATE_ACK de %s", self.node_name, peer_ip)
 
             # Aplicar el estado recibido del peer
             if response and response.payload.get("users"):
                 for user in response.payload["users"]:
                     self._on_gossip_update({"op": "add", "user": user})
+
+            logger.info("[%s] MERGE_STATE completado con %s", self.node_name, peer_ip)
 
         except Exception as e:
             logger.exception("[%s] Error durante MERGE_STATE con %s: %s", self.node_name, peer_ip, e)
@@ -153,6 +157,8 @@ class AuthNode(GossipNode):
         Recibe MERGE_STATE de otro nodo, aplica los usuarios y retorna
         MERGE_STATE_ACK con el estado propio.
         """
+
+        logger.info("[%s] Recibiendo MERGE_STATE de %s", self.node_name, message.header.get("src"))
         # Aplicar usuarios recibidos
         for user in message.payload.get("users", []):
             self._on_gossip_update({"op": "add", "user": user})
@@ -164,7 +170,8 @@ class AuthNode(GossipNode):
                     local_data = json.load(f)
             except FileNotFoundError:
                 local_data = {"users": []}
-
+        
+        logger.info("[%s] Enviando MERGE_STATE_ACK a %s", self.node_name, message.header.get("src"))
         return Message(type=MessageType.MERGE_STATE_ACK, src=self.ip, dst=message.header.get("src"), payload=local_data)
     
     def send_state(self, peer_ip: str):
@@ -179,17 +186,19 @@ class AuthNode(GossipNode):
         msg = Message(type=MessageType.SEND_STATE, src=self.ip, dst=peer_ip, payload=local_data)
         try:
             logger.info("[%s] Enviando SEND_STATE a %s", self.node_name, peer_ip)
-            self.send_message(peer_ip, msg, await_response=False)
+            self.send_message(peer_ip, 9000, msg, await_response=False)
+            logger.info("[%s] SEND_STATE completado con %s", self.node_name, peer_ip)
+
         except Exception:
             logger.exception("[%s] Error enviando SEND_STATE a %s", self.node_name, peer_ip)
-
-
+            
     def _handle_send_state(self, message: Message):
         """Recibe SEND_STATE de otro nodo y actualiza el estado local sin responder."""
         users = message.payload.get("users", [])
         for user in users:
             self._on_gossip_update({"op": "add", "user": user})
-        logger.info("[%s] Estado actualizado desde SEND_STATE de %s", self.node_name, message.src)
+
+        logger.info("[%s] Estado actualizado desde SEND_STATE de %s", self.node_name, message.header.get('src'))
 
 
     # -------------------- Métodos públicos --------------------
