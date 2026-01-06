@@ -62,16 +62,18 @@ def handle_stor(cmd: Command, data: dict = None, processing_node=None) -> tuple[
 
     try:
         response = processing_node.send_message(primary_ip, 9000, msg, await_response=True)
+        session.clear_pasv()
         
     except Exception:
+        session.clear_pasv()
         logger.exception("STOR failed contacting DataNode %s", primary_ip)
-        return 451, "Requested action aborted. File system unavailable.", None
+        return 451, "Requested action aborted. File system unavailable.", session.to_json()
 
     if not response:
-        return 451, "Requested action aborted. File system unavailable.", None
+        return 451, "Requested action aborted. File system unavailable.", session.to_json()
 
     status = response.metadata.get("status")
     if status in ["OK", "partial"]:
-        return 226, f"File '{filename}' stored successfully.", None
+        return 226, f"File '{filename}' stored successfully.", session.to_json()
 
-    return 550, response.metadata.get("message", "Failed to store file."), None
+    return 550, response.metadata.get("message", "Failed to store file."), session.to_json()
