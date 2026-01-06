@@ -2,6 +2,7 @@
 import argparse
 import logging
 import time
+import socket
 
 from server.modules.app import DataNode
 
@@ -12,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--id", required=True, help="ID del DataNode")
-    parser.add_argument("--ip", required=True, help="IP del nodo")
+    parser.add_argument("--ip", required=False, help="IP del nodo (opcional). Si no se pasa, se resolverá por DNS usando el nombre del nodo en Docker/Swarm")
     parser.add_argument("--port", type=int, default=9000, help="Puerto interno de escucha")
     parser.add_argument("--data-root", default=ROOT_DIRECTORY, help="Directorio raíz del filesystem")
     parser.add_argument("--discovery-timeout", type=float, default=0.8)
@@ -23,6 +24,15 @@ def main():
     ip = args.ip
     port = args.port
     data_root = args.data_root
+
+    if not ip:
+        try:
+            ip = socket.gethostbyname(node_name)
+            print(f"[INFO] Resolved IP via DNS for {node_name}: {ip}")
+        except Exception:
+            ip = "127.0.0.1"
+            print(f"[WARNING] Could not resolve {node_name} via DNS, falling back to {ip}")
+
 
     print(f"[INFO] Iniciando DataNode '{node_name}' en {ip}:{port}")
     print(f"[INFO] Data root: {data_root}")
