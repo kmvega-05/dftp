@@ -51,12 +51,14 @@ class RegisterTable:
                 self._ips.add(node.ip)
 
 
-    def remove_node(self, name: str):
+    def remove_node(self, name: str) -> ServiceRegister:
         """Elimina un nodo del registro por su nombre."""
         with self._lock:
             node = self._nodes.pop(name, None)
             if node:
                 self._ips.discard(node.ip)
+
+            return node
 
     def get_node(self, name: str) -> ServiceRegister | None:
         """Devuelve el nodo con el nombre dado, o None si no existe."""
