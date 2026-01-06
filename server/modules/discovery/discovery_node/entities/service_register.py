@@ -39,9 +39,14 @@ class ServiceRegister:
         return {
             "name": self.name,
             "ip": self.ip,
-            "type": self.node_role.value,
+            "role": self.node_role.value,
             "last_heartbeat": self.last_heartbeat
         }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ServiceRegister':
+        service_register = cls(name=data["name"], ip=data["ip"], node_role = NodeType(data["role"]))
+        return service_register
 
     def __str__(self):
         return f"{self.name} ({self.node_role.value}) - {self.ip}"
