@@ -33,17 +33,18 @@ def handle_nlst(cmd: Command, data: dict = None, processing_node=None) -> tuple[
         response = processing_node.send_message(primary_ip, 9000, msg, await_response=True, timeout=300)
 
     except Exception as e:
+        session.clear_pasv()
         logger.exception("Failed to contact DataNode (%s) for NLST: %s", primary_ip, e)
-        return 451, "Requested action aborted. File system unavailable.", None
+        return 451, "Requested action aborted. File system unavailable.", session.to_json()
 
     session.clear_pasv()
 
     if not response:
-        return 451, "Requested action aborted. File system unavailable.", None
+        return 451, "Requested action aborted. File system unavailable.", session.to_json()
 
     if response.metadata.get("status") != "OK":
         error_msg = response.metadata.get("message", "Failed to list directory.")
-        return 550, error_msg, None
+        return 550, error_msg, session.to_json()
 
-    return 212, "Directory listing successful.", None
+    return 212, "Directory listing successful.", session.to_json()
 

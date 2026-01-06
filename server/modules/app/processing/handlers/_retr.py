@@ -70,15 +70,19 @@ def handle_retr(cmd: Command, data: dict = None, processing_node=None) -> tuple[
     try:
         response = processing_node.send_message(primary_ip, 9000, Message(type=MessageType.DATA_RETR_FILE, src=processing_node.ip, dst=primary_ip, payload={"user": session.get_username(), "cwd": session.get_cwd(), "path": filename, "session_id": session.get_session_id(), "chunk_size": 65536}), await_response=True, timeout=300)
 
+        session.clear_pasv()
+
         if not response:
-            return 451, "Requested action aborted. File transfer failed.", None
+            return 451, "Requested action aborted. File transfer failed.", session.to_json()
         if response.metadata.get("status") != "OK":
-            return 550, response.metadata.get("message", "Failed to retrieve file."), None
-        return 212, f"File '{filename}' retrieved successfully.", None
+            return 550, response.metadata.get("message", "Failed to retrieve file."), session.to_json()
+        
+        return 212, f"File '{filename}' retrieved successfully.", session.to_json()
 
     except Exception as e:
+        session.clear_pasv()
         logger.exception("Failed to RETR file: %s", e)
-        return 550, "Failed to retrieve file.", None
+        return 550, "Failed to retrieve file.", session.to_json()
 
 
 def _update_node_from_peer(processing_node, target_ip, filename, src_ip):
