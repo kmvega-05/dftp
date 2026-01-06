@@ -13,7 +13,7 @@ from server.modules.app.data_node.metadata import FileMetadata, MetadataTable
 
 logger = logging.getLogger("dftp.app.data_node")
 
-K_REPLICAS = int(os.environ.get("DATA_NODE_REPLICATION_K", 3))
+K_REPLICAS = int(os.environ.get("DATA_NODE_REPLICATION_K", 1))
 
 class DataNode(LocationNode):
     """
