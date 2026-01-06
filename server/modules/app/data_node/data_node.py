@@ -298,6 +298,7 @@ class DataNode(LocationNode):
 
     def _handle_retr(self, message: Message):
         logger.info("[%s] Received DATA_RETR_FILE from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
+        
         session_id = message.payload.get("session_id")
         user = message.payload.get("user")
         cwd = message.payload.get("cwd")
@@ -426,13 +427,19 @@ class DataNode(LocationNode):
         """
         payload = message.payload or {}
         filename = payload.get("filename")
+        cwd = payload.get("cwd", "/")
 
         logger.info("[%s] Received DATA_META_REQUEST from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
+        logger.info("[%s] Buscando archivo: %s", self.node_name, filename)
         try:
             if filename:
-                meta = self.metadata_table.get(filename)
+                virtual_path = self.fs.normalize_virtual_path(cwd, filename)
+                meta = self.metadata_table.get(virtual_path)
+                logger.info("[%s] Found : %s", self.node_name, meta)
                 metadata = [meta.to_dict()] if meta else []
+            
             else:
+                logger.info("[%s] Retrieving all metadata")
                 metadata = [m.to_dict() for m in self.metadata_table.all()]
 
             return Message(type=MessageType.DATA_META_REQUEST_ACK, src=self.ip, dst=message.header.get("src"), payload={"success": True, "metadata": metadata})
@@ -545,9 +552,12 @@ class DataNode(LocationNode):
         """
         try:
             logger.info("[%s] Sending DATA_REPLICATE_FILE to %s for %s", self.node_name, target_ip, path)
+            
             replicate_msg = Message(type=MessageType.DATA_REPLICATE_FILE, src=self.ip, dst=target_ip, payload={"filename": path, "metadata": file_metadata.to_dict(), "user": user, "cwd": cwd})
             ack = self.send_message(target_ip, 9000, replicate_msg, await_response=True)  # sin timeout global
+            
             logger.info("[%s] Received replicate ack from %s: %s", self.node_name, target_ip, ack)
+            
             if ack and ack.metadata.get("status") == "OK":
                 with ack_lock:
                     ack_counter[0] += 1

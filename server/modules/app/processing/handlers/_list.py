@@ -35,7 +35,7 @@ def handle_list(cmd: Command, data: dict = None, processing_node=None) -> tuple[
     except Exception as e:
         session.clear_pasv()
         logger.exception("Failed to contact DataNode (%s) for LIST: %s", primary_ip, e)
-        return 451, "Requested action aborted. File system unavailable.", None
+        return 451, "Requested action aborted. File system unavailable.", session.to_json()
 
     session.clear_pasv()
 
