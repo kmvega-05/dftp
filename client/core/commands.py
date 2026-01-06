@@ -2,7 +2,10 @@ from core.connection import ControlConnectionManager
 from core.data_connection import DataConnectionManager
 from core.parser import Parser, MessageStructure
 import os
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 class ClientCommandHandler:
     def __init__(self, connection: ControlConnectionManager, parser: Parser):
@@ -19,9 +22,11 @@ class ClientCommandHandler:
         UI can show the welcome message immediately (fixes bug #1).
         """
         try:
+            logger.info("Reading server banner")
             response = self.conn.receive_response()
             if response:
                 parsed = self.parser.parse_data(response)
+                logger.info(f"Banner received: {parsed.code} - {parsed.message}")
                 self.history.append({
                     "time": datetime.utcnow(),
                     "command": "BANNER",
@@ -30,7 +35,8 @@ class ClientCommandHandler:
                     "error": parsed.type in ("error", "unknown")
                 })
                 return parsed
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to read banner: {e}")
             # Don't raise: banner is optional for some servers or may already have been
             # consumed; return None to the caller.
             return None
@@ -38,9 +44,11 @@ class ClientCommandHandler:
     
     # Comandos estandar, que no requieren conexion de datos
     def _execute(self, command: str) -> MessageStructure:
+        logger.info(f"Executing command: {command}")
         self.conn.send_command(command)
         response = self.conn.receive_response()
         parsed = self.parser.parse_data(response)
+        logger.info(f"Response: {parsed.code} - {parsed.message[:50] if parsed.message else ''}")
         self.history.append({
             "time": datetime.utcnow(),
             "command": command,
@@ -106,11 +114,14 @@ class ClientCommandHandler:
         return parse_result
 
     def _list(self, path: str = ""):
+        logger.info(f"LIST operation started for path: '{path}'")
         pasv_response = self._pasv()
         # Store PASV response in history entry later; if PASV failed, return it
         if not pasv_response.code.startswith('2'):
+            logger.error(f"PASV failed: {pasv_response.code} - {pasv_response.message}")
             return None, pasv_response
         ip, port = self.data_addr
+        logger.debug(f"Data connection established to {ip}:{port}")
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
         command = f"LIST {path}".strip()
@@ -119,11 +130,14 @@ class ClientCommandHandler:
         # read the preliminary response (usually 1xx) prior to receiving data
         prelim_resp = self.conn.receive_response()
         prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
+        logger.debug(f"Preliminary response: {prelim_parsed.code if prelim_parsed else 'None'}")
         listing = data_conn.receive_list()
+        logger.debug(f"Received listing: {len(listing)} bytes")
         data_conn.close()
         # after data transfer, read final response (2xx/4xx/5xx)
         response = self.conn.receive_response()
         parsed = self.parser.parse_data(response)
+        logger.info(f"LIST completed: {parsed.code} - {parsed.message}")
         self.history.append({
             "time": datetime.utcnow(),
             "command": f"LIST {path}".strip(),
@@ -141,20 +155,26 @@ class ClientCommandHandler:
         return listing, parsed
     
     def _nlst(self, path: str = ""):
+        logger.info(f"NLST operation started for path: '{path}'")
         pasv_response = self._pasv()
         if not pasv_response.code.startswith('2'):
+            logger.error(f"PASV failed: {pasv_response.code} - {pasv_response.message}")
             return None, pasv_response
         ip, port = self.data_addr
+        logger.debug(f"Data connection established to {ip}:{port}")
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
         command = f"NLST {path}".strip()
         self.conn.send_command(command)
         prelim_resp = self.conn.receive_response()
         prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
+        logger.debug(f"Preliminary response: {prelim_parsed.code if prelim_parsed else 'None'}")
         listing = data_conn.receive_list()
+        logger.debug(f"Received listing: {len(listing)} bytes")
         data_conn.close()
         response = self.conn.receive_response()
         parsed = self.parser.parse_data(response)
+        logger.info(f"NLST completed: {parsed.code} - {parsed.message}")
         self.history.append({
             "time": datetime.utcnow(),
             "command": f"NLST {path}".strip(),
@@ -175,19 +195,25 @@ class ClientCommandHandler:
         """
         Descarga un archivo desde el servidor y lo guarda en local_path.
         """
+        logger.info(f"RETR operation started: {remote_filename} → {local_path}")
         pasv_response = self._pasv()
         if not pasv_response.code.startswith('2'):
+            logger.error(f"PASV failed: {pasv_response.code} - {pasv_response.message}")
             return None, pasv_response
         ip, port = self.data_addr
+        logger.debug(f"Data connection established to {ip}:{port}")
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
         self.conn.send_command(f"RETR {remote_filename}")
         prelim_resp = self.conn.receive_response()
         prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
+        logger.debug(f"Preliminary response: {prelim_parsed.code if prelim_parsed else 'None'}")
         data_conn.receive_file(local_path)
+        logger.debug(f"File downloaded to {local_path}")
         data_conn.close()
         response = self.conn.receive_response()
         parsed = self.parser.parse_data(response)
+        logger.info(f"RETR completed: {parsed.code} - {parsed.message}")
         self.history.append({
             "time": datetime.utcnow(),
             "command": f"RETR {remote_filename}",
@@ -210,19 +236,25 @@ class ClientCommandHandler:
         """
         if remote_filename is None:
             remote_filename = os.path.basename(local_path)
+        logger.info(f"STOR operation started: {local_path} → {remote_filename}")
         pasv_response = self._pasv()
         if not pasv_response.code.startswith('2'):
+            logger.error(f"PASV failed: {pasv_response.code} - {pasv_response.message}")
             return None, pasv_response
         ip, port = self.data_addr
+        logger.debug(f"Data connection established to {ip}:{port}")
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
         self.conn.send_command(f"STOR {remote_filename}")
         prelim_resp = self.conn.receive_response()
         prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
+        logger.debug(f"Preliminary response: {prelim_parsed.code if prelim_parsed else 'None'}")
         data_conn.send_file(local_path)
+        logger.debug(f"File uploaded from {local_path}")
         data_conn.close()
         response = self.conn.receive_response()
         parsed = self.parser.parse_data(response)
+        logger.info(f"STOR completed: {parsed.code} - {parsed.message}")
         self.history.append({
             "time": datetime.utcnow(),
             "command": f"STOR {remote_filename}",
