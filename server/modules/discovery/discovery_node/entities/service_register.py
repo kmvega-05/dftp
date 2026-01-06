@@ -19,11 +19,11 @@ class ServiceRegister:
         . last_heartbeat : última señal enviada por el nodo
 
     """
-    def __init__(self, name: str, ip: str, node_role: NodeType):
+    def __init__(self, name: str, ip: str, node_role: NodeType, last_heartbeat : None):
         self.name = name
         self.ip = ip
         self.node_role = node_role
-        self.last_heartbeat = time.time()
+        self.last_heartbeat = last_heartbeat or time.time()
 
     def heartbeat(self, ip):
         """
@@ -45,7 +45,7 @@ class ServiceRegister:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'ServiceRegister':
-        service_register = cls(name=data["name"], ip=data["ip"], node_role = NodeType(data["role"]))
+        service_register = cls(name=data["name"], ip=data["ip"], node_role = NodeType(data["role"]), last_heartbeat= data.get("last_heartbeat", time.time()))
         return service_register
 
     def __str__(self):

@@ -58,6 +58,11 @@ class GossipNode(LocationNode):
                 discovered_peers = self.query_by_role(self.node_role) or []
                 new_peers = []
 
+                # Determinar coordinador: nodo con menor nombre
+                current_peers = list(self.peers.keys())
+                current_peers.append(self.node_name)
+                coordinador = min(current_peers)
+
                 with self.peers_lock:
                     for peer in discovered_peers:
                         peer_name = peer.get("name")
@@ -71,11 +76,6 @@ class GossipNode(LocationNode):
                 if new_peers:
                     logger.info("[%s] Nuevos peers descubiertos: %s", self.node_name, [p["name"] for p in new_peers])
 
-                    # Determinar coordinador: nodo con menor nombre
-                    all_peers = list(self.peers.keys())
-                    all_peers.append(self.node_name)
-                    coordinador = min(all_peers)
-
                     if self.node_name == coordinador:
                         # Elegir un único nodo nuevo para merge
                         nodo_merge = min([p["name"] for p in new_peers])
@@ -87,8 +87,13 @@ class GossipNode(LocationNode):
                                 with self.merging_lock:
                                     logger.info("[%s] Merge de estado con peer %s (%s)", self.node_name, nodo_merge, peer_ip)
                                     self._merge_state(peer_ip)
+
+                                    for dst_ip in self.peers.values():
+                                        if dst_ip == peer_ip:
+                                            continue 
+                                        self.send_state(dst_ip)
                             except Exception:
-                                logger.exception("[%s] Error durante merge con peer %s", self.node_name, nodo_merge)
+                                logger.exception("[%s] Error durante merge con peer %s", self.node_name, nodo_merge)                
 
             except Exception:
                 logger.exception("[%s] Error en _update_peers", self.node_name)
