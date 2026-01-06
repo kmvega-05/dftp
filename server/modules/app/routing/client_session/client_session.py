@@ -42,6 +42,10 @@ class ClientSession:
     def get_session_id(self) -> str:
         return self.session_id 
 
+    def get_client_ip(self) -> str:
+        """Retorna la IP del cliente asociada a la sesión."""
+        return self._client_ip
+
     # -------------------- User / auth --------------------
 
     def change_user(self, username: str) -> None:
