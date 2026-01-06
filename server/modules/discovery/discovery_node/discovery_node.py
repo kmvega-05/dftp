@@ -143,10 +143,11 @@ class DiscoveryNode(GossipNode):
             # Si el nodo ya estaba registrado, actualizar ip y heartbeat
             if existing:
                 existing.heartbeat(ip)
-
-                for peer_ip in self.peers.values():
-                    repl_msg = Message(MessageType.GOSSIP_UPDATE, self.ip, peer_ip, payload={"op": "add", "registry" : existing.to_dict()})
-                    self.send_message(peer_ip, 9000, repl_msg, await_response=False)
+                
+                with self.merging_lock:
+                    for peer_ip in self.peers.values():
+                        repl_msg = Message(MessageType.GOSSIP_UPDATE, self.ip, peer_ip, payload={"op": "add", "registry" : existing.to_dict()})
+                        self.send_message(peer_ip, 9000, repl_msg, await_response=False)
 
             # Si no, registrarlo
             else:
@@ -155,9 +156,10 @@ class DiscoveryNode(GossipNode):
                     self.register_table.add_node(sr)
                     logger.info(f"New node registered: {name}, {str(node_role)} : ({ip})")
                     
-                    for peer_ip in self.peers.values():
-                        repl_msg = Message(MessageType.GOSSIP_UPDATE, self.ip, peer_ip, payload={"op": "add", "registry" : sr.to_dict()})
-                        self.send_message(peer_ip, 9000, repl_msg, await_response=False)
+                    with self.merging_lock:
+                        for peer_ip in self.peers.values():
+                            repl_msg = Message(MessageType.GOSSIP_UPDATE, self.ip, peer_ip, payload={"op": "add", "registry" : sr.to_dict()})
+                            self.send_message(peer_ip, 9000, repl_msg, await_response=False)
 
                 except Exception as e:
                     logger.exception("Error registrando nodo %s: %s", name, e)
@@ -301,7 +303,7 @@ class DiscoveryNode(GossipNode):
                     
                     for peer_ip in self.peers.values():
                         repl_msg = Message(MessageType.GOSSIP_UPDATE, self.ip, peer_ip, payload={"op": "delete", "registry": n.to_dict()})
-                    self.send_message(peer_ip, 9000, repl_msg, await_response=False)
+                        self.send_message(peer_ip, 9000, repl_msg, await_response=False)
             
             except Exception:
                 logger.exception("Error en clean_inactive_register_loop")
@@ -352,7 +354,7 @@ class DiscoveryNode(GossipNode):
         current_peers.append(self.node_name)
         coordinador = min(current_peers)
         
-        new_peers = []
+        new_peers = {}
         with self.peers_lock:
             for peer_name in discovered_peers.keys():
 
@@ -360,11 +362,11 @@ class DiscoveryNode(GossipNode):
                     continue
 
                 if peer_name not in self.peers.keys():
-                    new_peers.append(peer_name)
+                    new_peers[peer_name] = discovered_peers[peer_name]
                     self.peers[peer_name] = discovered_peers[peer_name]
 
         if new_peers:
-            logger.info("[%s] Nuevos peers descubiertos: %s", self.node_name, [p["name"] for p in new_peers])
+            logger.info("[%s] Nuevos peers descubiertos: %s", self.node_name, list(new_peers.keys()))
 
             if self.node_name == coordinador:
                 # Elegir un único nodo nuevo para merge
