@@ -66,6 +66,7 @@ with st.sidebar:
             conn.connect()
             st.session_state["conn"] = conn
             logger.info(f"[UI] Connection successful")
+            logger.info(str(st.session_state["conn"]))
             handler = ClientCommandHandler(conn, Parser())
             st.session_state["handler"] = handler
             # Read and record the server banner (welcome message) immediately
@@ -105,6 +106,7 @@ with st.sidebar:
             st.error(f"Connection failed: {e}")
     if st.button("Disconnect"):
         logger.info("[UI] Disconnect button clicked")
+        logger.info(st.session_state.get("conn"))
         conn = st.session_state.get("conn")
         if conn:
             try:
