@@ -1,6 +1,7 @@
 import threading
 import logging
 import time
+import os
 
 from server.modules.discovery import LocationNode, NodeType
 from server.modules.comm import Message, MessageType
@@ -132,20 +133,83 @@ class GossipNode(LocationNode):
             time.sleep(self.heartbeat_interval)
 
     # ----------------- Notificación de cambios locales -----------------
-    def notify_local_change(self, change: dict):
+    def notify_local_change(self, change: dict, sync: bool = False, required_acks: int = None) -> bool:
+        """
+        Notifica cambios locales a los peers.
+        
+        Args:
+            change: Diccionario con el cambio a replicar
+            sync: Si True, espera confirmaciones de los peers (sincrónico, en paralelo)
+            required_acks: Número de ACKs requeridos (si sync=True). 
+                          Si es None, se usa la variable de entorno GOSSIP_REQUIRED_ACKS o mayoría
+        
+        Returns:
+            True si la operación fue exitosa, False si sync=True y no llegaron suficientes ACKs
+        """
         if not change:
-            return
+            return True
 
         with self.peers_lock:
             peers_snapshot = list(self.peers.values())
 
-        for peer_ip in peers_snapshot:
+        # Si no es sincrónico, solo enviar sin esperar
+        if not sync:
+            for peer_ip in peers_snapshot:
+                try:
+                    logger.info(f"[{self.node_name}] Notificando cambio a {peer_ip} : {change}")
+                    msg = Message(type=MessageType.GOSSIP_UPDATE, src=self.ip, dst=peer_ip, payload=change)
+                    self.send_message(peer_ip, 9000, msg, await_response=False)
+                except Exception:
+                    logger.info("[%s] Error enviando gossip update a %s", self.node_name, peer_ip)
+            return True
+
+        # Modo sincrónico: enviar en paralelo y contar confirmaciones
+        if not peers_snapshot:
+            logger.info("[%s] notify_local_change sync: sin peers, retornando OK", self.node_name)
+            return True
+
+        # Determinar cantidad de ACKs requeridos
+        if required_acks is None:
+            required_acks = int(os.getenv("GOSSIP_REQUIRED_ACKS", len(peers_snapshot) // 2 + 1))
+
+        required_acks = min(required_acks, len(peers_snapshot))
+        
+        logger.info(f"[{self.node_name}] Enviando GOSSIP_UPDATE sync a {len(peers_snapshot)} peers, requiriendo {required_acks} ACKs")
+
+        # Enviar mensajes en paralelo y recopilar resultados
+        results = {}
+        threads = []
+
+        def send_and_collect(peer_ip):
             try:
-                logger.info(f"Notificando cambio a {peer_ip} : {change}")
-                msg = Message(type=MessageType.GOSSIP_UPDATE, src=self.ip, dst=peer_ip ,payload=change)
-                self.send_message(peer_ip, 9000, msg, await_response=False)
-            except Exception:
-                logger.info("[%s] Error enviando gossip update a %s", self.node_name, peer_ip)
+                logger.info(f"[{self.node_name}] Enviando GOSSIP_UPDATE sync a {peer_ip}")
+                msg = Message(type=MessageType.GOSSIP_UPDATE, src=self.ip, dst=peer_ip, payload=change)
+                response = self.send_message(peer_ip, 9000, msg, await_response=True)
+                results[peer_ip] = response is not None
+                if response:
+                    logger.info(f"[{self.node_name}] ACK recibido de {peer_ip}")
+                else:
+                    logger.warning(f"[{self.node_name}] No se recibió respuesta de {peer_ip} (timeout)")
+            except Exception as e:
+                logger.warning(f"[{self.node_name}] Error enviando a {peer_ip}: {e}")
+                results[peer_ip] = False
+
+        # Lanzar threads para enviar en paralelo
+        for peer_ip in peers_snapshot:
+            t = threading.Thread(target=send_and_collect, args=(peer_ip,), daemon=False)
+            t.start()
+            threads.append(t)
+
+        # Esperar a que terminen todos los threads
+        for t in threads:
+            t.join()
+
+        # Contar confirmaciones
+        confirmed_count = sum(1 for response in results.values() if response)
+        
+        logger.info(f"[{self.node_name}] notify_local_change sync: {confirmed_count}/{len(peers_snapshot)} ACKs recibidos (requería {required_acks})")
+
+        return confirmed_count >= required_acks
 
     # ----------------- Handler de gossip -----------------
     def _handle_gossip_update(self, message: Message):
@@ -153,11 +217,17 @@ class GossipNode(LocationNode):
         try:
             change = message.payload
             if not change:
-                return
+                return Message(MessageType.GOSSIP_UPDATE, self.ip, message.header.get('src'), payload={"success": True})
+            
             with self.merging_lock:
-                self._on_gossip_update(change)
+                result = self._on_gossip_update(change)
+            
+            # Retornar ACK de éxito
+            return Message(MessageType.GOSSIP_UPDATE, self.ip, message.header.get('src'), payload={"success": result})
         except Exception as e:
             logger.exception("[%s] Error manejando GOSSIP_UPDATE de %s: %s", self.node_name, message.header.get('src'), e)
+            # Retornar ACK de fallo
+            return Message(MessageType.GOSSIP_UPDATE, self.ip, message.header.get('src'), payload={"success": False})
 
     # ----------------- Método para detener hilos -----------------
     def stop(self):

@@ -73,22 +73,26 @@ class RoutingNode(GossipNode):
 
 
     def _handle_client(self, client_sock, client_addr) -> None:
+        client_ip = client_addr[0]
+        session, is_new_session = self._get_or_create_session(client_ip, client_sock)
 
-        session_id = str(uuid.uuid4())
-        session = ClientSession(session_id=session_id, client_ip=client_addr[0], control_socket=client_sock)
-
-        # Registrar la sesión en la tabla
-        self._session_table.add(session)
-
-        # Notificar peers (gossip) del nuevo estado de sesión
-        try:
-            self.notify_local_change({"op": "add", "session": session.to_json()})
-        except Exception:
-            logger.debug("[%s] notify_local_change failed on add", self.node_name)
+        # Notificar a otros nodos si es una nueva sesión
+        if is_new_session:
+            try:
+                replicated = self.notify_local_change(
+                    {"op": "add", "session": session.to_json()},
+                    sync=True
+                )
+                if not replicated:
+                    logger.warning("[%s] Nueva sesión %s no pudo replicarse a suficientes peers", 
+                                 self.node_name, session.session_id)
+            except Exception as e:
+                logger.warning("[%s] Error replicando nueva sesión %s: %s", 
+                             self.node_name, session.session_id, e)
 
         try:
             session.send_response(220, "Distributed FTP Server Ready")
-            logger.info("[%s] Sesión creada para %s: %s", self.node_name, client_addr, session)
+            logger.info("[%s] 220 enviado para sesión %s", self.node_name, session.session_id)
 
             for line in session.recv_lines():
                 if not line:
@@ -104,23 +108,29 @@ class RoutingNode(GossipNode):
                     break
 
                 except Exception:
-                    logger.exception("[%s][%s] Error dispatching command", self.node_name, session_id)
+                    logger.exception("[%s][%s] Error dispatching command", self.node_name, session.session_id)
                     session.send_response(451, "Requested action aborted. Local error in processing")
 
         except Exception:
             logger.exception("[%s] Error en la sesión de %s", self.node_name, client_addr)
 
         finally:
+            
             try:
                 client_sock.close()
-
+            
             except Exception:
                 pass
 
-            # Eliminar de la tabla de sesiones
-            self._session_table.remove_by_id(session_id)
+            # Eliminar la sesión de la tabla cuando el cliente cierra la conexión
+            # Si el RoutingNode cae, el finally no se ejecuta y la sesión permanece
+            # El cliente puede reconectar y reutilizarla por su IP
+            
+            self._session_table.remove_by_id(session.session_id)
+            
             try:
-                self.notify_local_change({"op": "delete", "session_id": session_id})
+                self.notify_local_change({"op": "delete", "session_id": session.session_id})
+            
             except Exception:
                 logger.debug("[%s] notify_local_change failed on delete", self.node_name)
 
@@ -182,6 +192,53 @@ class RoutingNode(GossipNode):
     def get_session_by_id(self, session_id: str) -> ClientSession | None:
         """Retorna la sesión correspondiente a session_id, o None si no existe"""
         return self._session_table.get_by_id(session_id)
+
+    def _get_or_create_session(self, client_ip: str, client_sock: "socket.socket") -> tuple["ClientSession", bool]:
+        """
+        Obtiene una sesión existente para el IP dado y le setea el socket de control,
+        o crea una nueva si no existe.
+        
+        Args:
+            client_ip: Dirección IP del cliente
+            client_sock: Socket de control del cliente
+            
+        Returns:
+            Tupla (ClientSession, is_new) donde is_new indica si la sesión fue creada
+        """
+        # Intentar reutilizar sesión existente
+        session = self._find_active_session_by_ip(client_ip)
+        
+        if session:
+            session.set_control_socket(client_sock)
+            logger.info("[%s] Sesión reutilizada para %s: %s", self.node_name, client_ip, session.session_id)
+            return session, False
+        
+        # Crear nueva sesión si no existe
+        session_id = str(uuid.uuid4())
+        session = ClientSession(session_id=session_id, client_ip=client_ip, control_socket=client_sock)
+        self._session_table.add(session)
+        logger.info("[%s] Nueva sesión creada para %s: %s", self.node_name, client_ip, session_id)
+        
+        return session, True
+
+    def _find_active_session_by_ip(self, client_ip: str) -> "ClientSession" | None:
+        """
+        Busca una sesión activa (no cerrada) asociada a un IP.
+        Retorna la sesión o None si no encuentra ninguna.
+        
+        Args:
+            client_ip: Dirección IP del cliente
+            
+        Returns:
+            ClientSession si existe una activa, None si no hay
+        """
+        existing_sessions = self._session_table.get_by_ip(client_ip)
+        
+        for s in existing_sessions:
+            if s and not s.is_closed():
+                return s
+        
+        return None
 
     def get_processing_nodes(self) -> list:
         """Obtiene la lista de processing nodes disponibles"""
@@ -246,36 +303,48 @@ class RoutingNode(GossipNode):
         except Exception:
             logger.exception("[%s] Error importing sessions", self.node_name)
 
-    def _on_gossip_update(self, update: dict):
-        """Aplica cambios recibidos via gossip (add/delete)."""
+    def _on_gossip_update(self, update: dict) -> bool:
+        """
+        Aplica cambios recibidos via gossip (add/delete).
+        Retorna True si se aplicó correctamente, False si hubo error.
+        """
         logger.info("[%s] Received gossip update: %s", self.node_name, update)
 
         op = update.get("op")
         
         if not op:
-            return
+            return False
 
         if op == "add":
             session_data = update.get("session")
             if not session_data:
-                return
+                return False
             try:
                 s = ClientSession.from_json(session_data)
                 self._session_table.add(s)
+                logger.info("[%s] Sesión replicada: %s", self.node_name, s.session_id)
+                return True
+            
             except Exception:
                 logger.exception("[%s] Error applying gossip add", self.node_name)
+                return False
 
         elif op == "delete":
             sid = update.get("session_id")
+            
             if not sid:
-                return
+                return False
+
             try:
                 self._session_table.remove_by_id(sid)
+                logger.info("[%s] Sesión eliminada: %s", self.node_name, sid)
+                return True
+
             except Exception:
                 logger.exception("[%s] Error applying gossip delete", self.node_name)
+                return False
         
-        logger.info("[%s] Applied gossip update: %s", self.node_name, op)
-        logger.info("[%s] Current sessions: %s", self.node_name, self._session_table)
+        return False
 
     def _merge_state(self, peer_ip: str):
         """Inicia merge bidireccional con peer_ip."""
