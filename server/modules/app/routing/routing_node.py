@@ -139,6 +139,8 @@ class RoutingNode(GossipNode):
         Envía un comando FTP a un processing node.
         Retorna True si la sesión debe cerrarse. """
 
+        logger.info("Command received: [%s]", line)
+
         processing_nodes = self.get_processing_nodes()
         last_error = None
 
@@ -221,7 +223,7 @@ class RoutingNode(GossipNode):
         
         return session, True
 
-    def _find_active_session_by_ip(self, client_ip: str) -> "ClientSession" | None:
+    def _find_active_session_by_ip(self, client_ip: str) -> ClientSession | None:
         """
         Busca una sesión activa (no cerrada) asociada a un IP.
         Retorna la sesión o None si no encuentra ninguna.
@@ -235,7 +237,7 @@ class RoutingNode(GossipNode):
         existing_sessions = self._session_table.get_by_ip(client_ip)
         
         for s in existing_sessions:
-            if s and not s.is_closed():
+            if s and s.is_closed():
                 return s
         
         return None

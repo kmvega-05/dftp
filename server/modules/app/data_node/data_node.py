@@ -401,15 +401,19 @@ class DataNode(LocationNode):
             for t in threads:
                 t.start()
 
-            # Esperamos hasta recibir K acks
+            # Esperamos hasta recibir K acks con timeout de 5 minutos
             if not replicate_to:
                 ack_event.set()
             else:
-                ack_event.wait()
+                # Timeout: 5 minutos para replicación completa
+                max_wait = 300  # 5 minutos
+                ack_received = ack_event.wait(timeout=max_wait)
+                if not ack_received:
+                    logger.warning("[%s] Replication timeout after %d seconds, received %d acks out of %d", self.node_name, max_wait, ack_counter[0], len(replicate_to))
 
             # 5️⃣ Retornamos respuesta al cliente
             status = "OK" if ack_counter[0] >= min(K_REPLICAS, len(replicate_to)) else "partial"
-            logger.info("[%s] Replication finished for %s, acks_received=%s", self.node_name, virtual_path, ack_counter[0])
+            logger.info("[%s] Replication finished for %s, acks_received=%s, required=%s, status=%s", self.node_name, virtual_path, ack_counter[0], min(K_REPLICAS, len(replicate_to)), status)
 
             return Message(MessageType.DATA_STORE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": status, "acks_received": ack_counter[0]})
 
@@ -477,40 +481,63 @@ class DataNode(LocationNode):
             logger.info("[%s] Sending DATA_REPLICATE_READY to %s -> %s:%s", self.node_name, message.header.get("src"), listen_ip, listen_port)
             self.send_message(message.header.get("src"), 9000, ready_msg, await_response=False)
 
-            # Esperar conexión del nodo que enviará el archivo
-            conn, _ = sock.accept()
+            # Esperar conexión del nodo que enviará el archivo - timeout de 5 minutos
+            sock.settimeout(300)
+            logger.debug("[%s] Waiting for connection on %s:%s with timeout 300s", self.node_name, listen_ip, listen_port)
+            conn, addr = sock.accept()
+            logger.debug("[%s] Connection accepted from %s", self.node_name, addr)
+            
             with conn:
+                # Timeout en lectura: 60 segundos de inactividad
+                conn.settimeout(60)
+                bytes_received = 0
+                
                 def chunk_gen():
+                    nonlocal bytes_received
                     while True:
-                        chunk = conn.recv(chunk_size)
-                        if not chunk:
-                            break
-                        yield chunk
+                        try:
+                            chunk = conn.recv(chunk_size)
+                            if not chunk:
+                                logger.debug("[%s] No more data, received %d bytes total", self.node_name, bytes_received)
+                                break
+                            bytes_received += len(chunk)
+                            logger.debug("[%s] Received chunk: %d bytes (total: %d bytes)", self.node_name, len(chunk), bytes_received)
+                            yield chunk
+                        except socket.timeout:
+                            logger.error("[%s] Socket timeout while receiving file data (received %d bytes so far)", self.node_name, bytes_received)
+                            raise TimeoutError(f"Socket timeout after receiving {bytes_received} bytes")
 
                 # Guardar archivo en filesystem
                 namespace = self.fs.get_namespace(user)
+                logger.info("[%s] Writing file %s for user %s", self.node_name, filename, user)
                 self.fs.write_stream(namespace, cwd, filename, chunk_gen(), chunk_size=chunk_size)
+                logger.info("[%s] File received and written: %d bytes", self.node_name, bytes_received)
 
             # Actualizar metadata
             self.metadata_table.upsert(file_metadata)
             logger.info("[%s] Replicated file stored: %s for user %s", self.node_name, filename, user)
             return Message(MessageType.DATA_REPLICATE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
+        except socket.timeout as e:
+            logger.error("[%s] DATA_REPLICATE_FILE timeout: %s", self.node_name, e)
+            return Message(MessageType.DATA_REPLICATE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": f"Timeout: {e}"})
+        
         except Exception as e:
-            logger.exception("DATA_REPLICATE_FILE failed: %s", e)
+            logger.exception("[%s] DATA_REPLICATE_FILE failed: %s", self.node_name, e)
             return Message(MessageType.DATA_REPLICATE_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": str(e)})
 
         finally:
-                try:
+            try:
+                if sock:
                     sock.close()
-                except:
-                    pass
+            except:
+                pass
 
     def _handle_replicate_ready(self, message: Message):
         """
         Maneja DATA_REPLICATE_READY:
         - Se conecta al nodo destino usando IP/puerto indicados.
-        - Envía el archivo en stream.
+        - Envía el archivo en stream con timeouts adecuados.
         """
         payload = message.payload or {}
         ip = payload.get("ip")
@@ -522,53 +549,87 @@ class DataNode(LocationNode):
         logger.info("[%s] Received DATA_REPLICATE_READY from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         
         if not all([ip, port, filename, user, cwd]):
-            logger.error("Missing required fields in DATA_REPLICATE_READY")
+            logger.error("[%s] Missing required fields in DATA_REPLICATE_READY", self.node_name)
             return  # Mensaje de control, no return de respuesta
 
         try:
             # Determinar la ruta real y generar stream del archivo
             namespace = self.fs.get_namespace(user)
 
-            logger.info("[%s] Connecting to %s:%s to send file %s", self.node_name, ip, port, filename)
+            logger.info("[%s] Connecting to %s:%s to send file %s (user=%s, cwd=%s)", self.node_name, ip, port, filename, user, cwd)
             
             # Generador de chunks
             chunk_gen = self.fs.read_stream(namespace, cwd, filename)
 
-            # Conectar al nodo destino
+            # Conectar al nodo destino con timeout
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(30)  # timeout de conexión: 30 segundos
+                logger.debug("[%s] Connecting with 30s timeout", self.node_name)
                 sock.connect((ip, port))
-                logger.info("Sending file '%s' to %s:%s", filename, ip, port)
+                logger.debug("[%s] Connected successfully", self.node_name)
+                
+                # Timeout en envío: 60 segundos de inactividad
+                sock.settimeout(60)
+                bytes_sent = 0
+                chunk_count = 0
+                
+                logger.info("[%s] Sending file '%s' to %s:%s", self.node_name, filename, ip, port)
                 for chunk in chunk_gen:
-                    sock.sendall(chunk)
+                    try:
+                        sock.sendall(chunk)
+                        bytes_sent += len(chunk)
+                        chunk_count += 1
+                        logger.debug("[%s] Sent chunk %d: %d bytes (total: %d bytes)", self.node_name, chunk_count, len(chunk), bytes_sent)
+                    except socket.timeout:
+                        logger.error("[%s] Socket timeout while sending to %s:%s (sent %d bytes in %d chunks)", self.node_name, ip, port, bytes_sent, chunk_count)
+                        raise TimeoutError(f"Socket timeout after sending {bytes_sent} bytes")
 
-            logger.info("[%s] File '%s' sent successfully to %s:%s", self.node_name, filename, ip, port)
+            logger.info("[%s] File '%s' sent successfully to %s:%s (%d bytes in %d chunks)", self.node_name, filename, ip, port, bytes_sent, chunk_count)
 
+        except socket.timeout as e:
+            logger.error("[%s] Connection timeout while replicating file '%s' to %s:%s: %s", self.node_name, filename, ip, port, e)
+        
         except Exception as e:
             logger.exception("[%s] Error replicating file '%s' to %s:%s: %s", self.node_name, filename, ip, port, e)
 
     def _replicate_to_node(self, target_ip: str, file_metadata: FileMetadata, path: str, user: str, cwd: str, ack_counter: list, ack_lock: threading.Lock, ack_event: threading.Event, total_peers : int):
         """
         Envía DATA_REPLICATE_FILE a un nodo objetivo y actualiza contador de acks.
+        Incluye reintentos para archivos grandes.
         """
-        try:
-            logger.info("[%s] Sending DATA_REPLICATE_FILE to %s for %s", self.node_name, target_ip, path)
-            
-            replicate_msg = Message(type=MessageType.DATA_REPLICATE_FILE, src=self.ip, dst=target_ip, payload={"filename": path, "metadata": file_metadata.to_dict(), "user": user, "cwd": cwd})
-            ack = self.send_message(target_ip, 9000, replicate_msg, await_response=True)  # sin timeout global
-            
-            logger.info("[%s] Received replicate ack from %s: %s", self.node_name, target_ip, ack)
-            
-            if ack and ack.metadata.get("status") == "OK":
-                with ack_lock:
-                    ack_counter[0] += 1
-                    logger.info("[%s] Ack counter incremented: %s", self.node_name, ack_counter[0])
-                    if ack_counter[0] >= min(K_REPLICAS, total_peers):
-                        ack_event.set()
+        max_retries = 3
+        retry_delay = 2  # segundos
         
-        except Exception as e:
-            logger.exception("[%s] Error sending replicate to %s: %s", self.node_name, target_ip, e)
-            # ignoramos errores de nodos individuales
-            pass
+        for attempt in range(max_retries):
+            try:
+                logger.info("[%s] Sending DATA_REPLICATE_FILE to %s for %s (attempt %d/%d)", self.node_name, target_ip, path, attempt + 1, max_retries)
+                
+                # Aumentar timeout para archivos grandes: 30 segundos + tiempo variable
+                timeout = 30.0 + (attempt * 5)  # aumenta con cada reintento
+                
+                replicate_msg = Message(type=MessageType.DATA_REPLICATE_FILE, src=self.ip, dst=target_ip, payload={"filename": path, "metadata": file_metadata.to_dict(), "user": user, "cwd": cwd})
+                ack = self.send_message(target_ip, 9000, replicate_msg, await_response=True, timeout=timeout)
+                
+                logger.info("[%s] Received replicate ack from %s: %s", self.node_name, target_ip, ack)
+                
+                if ack and ack.metadata.get("status") == "OK":
+                    with ack_lock:
+                        ack_counter[0] += 1
+                        logger.info("[%s] Ack counter incremented: %s", self.node_name, ack_counter[0])
+                        if ack_counter[0] >= min(K_REPLICAS, total_peers):
+                            ack_event.set()
+                    return  # éxito, salir
+                else:
+                    logger.warning("[%s] Replication to %s returned status: %s", self.node_name, target_ip, ack.metadata.get("status") if ack else "None")
+            
+            except Exception as e:
+                logger.warning("[%s] Error sending replicate to %s (attempt %d/%d): %s", self.node_name, target_ip, attempt + 1, max_retries, e)
+                
+                if attempt < max_retries - 1:
+                    logger.info("[%s] Retrying in %d seconds...", self.node_name, retry_delay)
+                    time.sleep(retry_delay)
+                else:
+                    logger.error("[%s] Replication failed to %s after %d attempts", self.node_name, target_ip, max_retries)
 
     def _handle_rename_file(self, message: Message):
         logger.info("[%s] Received RENAME_FILE from %s payload=%s", self.node_name, message.header.get("src"), message.payload)

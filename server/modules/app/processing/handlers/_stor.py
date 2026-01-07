@@ -61,7 +61,10 @@ def handle_stor(cmd: Command, data: dict = None, processing_node=None) -> tuple[
     msg = Message(type=MessageType.DATA_STORE_FILE, src=processing_node.ip, dst=primary_ip, payload={"session_id": session.get_session_id(), "user": session.get_username(), "cwd": session.get_cwd(), "path": filename, "version": version, "transfer_id": transfer_id, "replicate_to": replicas, "chunk_size": 65536})
 
     try:
-        response = processing_node.send_message(primary_ip, 9000, msg, await_response=True)
+        # Increased timeout to 6 minutes (360s) to allow for file storage + replication (max 5min + buffer)
+        logger.info(f"[STOR] Sending DATA_STORE_FILE to {primary_ip} with {len(replicas)} replicas for file '{filename}'")
+        response = processing_node.send_message(primary_ip, 9000, msg, await_response=True, timeout=360)
+        logger.info(f"[STOR] Received response from {primary_ip}: {response}")
         session.clear_pasv()
         
     except Exception:
@@ -73,6 +76,9 @@ def handle_stor(cmd: Command, data: dict = None, processing_node=None) -> tuple[
         return 451, "Requested action aborted. File system unavailable.", session.to_json()
 
     status = response.metadata.get("status")
+    acks_received = response.metadata.get("acks_received", 0)
+    logger.info(f"STOR completed: status={status}, acks_received={acks_received}")
+    
     if status in ["OK", "partial"]:
         return 226, f"File '{filename}' stored successfully.", session.to_json()
 

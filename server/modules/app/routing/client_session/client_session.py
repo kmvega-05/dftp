@@ -156,7 +156,7 @@ class ClientSession:
             return
 
         try:
-            line = f"> {code} {message}\r\n"
+            line = f"{code} {message}\r\n"
             self._control_socket.sendall(line.encode("utf-8"))
             logger.info("Sent to %s: %s", self._client_ip, line.strip())
 
