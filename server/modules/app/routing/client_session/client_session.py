@@ -46,6 +46,10 @@ class ClientSession:
         """Retorna la IP del cliente asociada a la sesión."""
         return self._client_ip
 
+    def is_closed(self) -> bool:
+        """Retorna True si la sesión está cerrada (sin socket de control)."""
+        return self._control_socket is None
+
     # -------------------- User / auth --------------------
 
     def change_user(self, username: str) -> None:
