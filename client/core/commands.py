@@ -205,6 +205,7 @@ class ClientCommandHandler:
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
         self.conn.send_command(f"RETR {remote_filename}")
+        print(remote_filename)
         prelim_resp = self.conn.receive_response()
         prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
         logger.debug(f"Preliminary response: {prelim_parsed.code if prelim_parsed else 'None'}")
@@ -245,7 +246,8 @@ class ClientCommandHandler:
         logger.debug(f"Data connection established to {ip}:{port}")
         data_conn = DataConnectionManager(ip, port)
         data_conn.connect()
-        self.conn.send_command(f"STOR {remote_filename}")
+        self.conn.send_command(f"STOR \"{remote_filename}\"")
+        print(remote_filename)
         prelim_resp = self.conn.receive_response()
         prelim_parsed = self.parser.parse_data(prelim_resp) if prelim_resp else None
         logger.debug(f"Preliminary response: {prelim_parsed.code if prelim_parsed else 'None'}")
