@@ -50,6 +50,80 @@ def run_in_thread(fn, *args, **kwargs):
     return t, result
 
 
+def check_connection_health():
+    """
+    Check if the current connection is still alive.
+    Returns True if connected and healthy, False otherwise.
+    If disconnected, shows an error message with instructions.
+    """
+    handler = st.session_state.get("handler")
+    conn = st.session_state.get("conn")
+    
+    if not handler or not conn:
+        return False
+    
+    # Try to detect if connection is broken by checking socket
+    try:
+        if conn.socket is None:
+            st.error("❌ **Server Connection Lost**\n\nThe routing server you were connected to has gone down. Please try one of the following:\n\n1. **Reconnect** - Click the 'Connect' button to try reconnecting\n2. **Try another server** - Enter a different routing server address (e.g., routing2:2121)")
+            st.session_state["conn"] = None
+            st.session_state["handler"] = None
+            return False
+    except Exception as e:
+        logger.warning(f"[UI] Connection health check failed: {e}")
+        st.error("❌ **Connection Error**\n\nCould not communicate with the routing server. Please reconnect.")
+        st.session_state["conn"] = None
+        st.session_state["handler"] = None
+        return False
+    
+    return True
+
+
+def handle_connection_error(error):
+    """
+    Handle connection-related errors and show appropriate message.
+    Returns True if it was a connection error, False otherwise.
+    """
+    error_str = str(error).lower()
+    connection_keywords = ["connection", "refused", "reset", "closed", "timeout", "socket", "unreachable", "errno"]
+    
+    if any(keyword in error_str for keyword in connection_keywords):
+        logger.warning(f"[UI] Connection error detected: {error}")
+        st.error("❌ **Server Connection Lost**\n\nThe routing server you were connected to has gone down. Please try one of the following:\n\n1. **Reconnect** - Click the 'Connect' button to try reconnecting\n2. **Try another server** - Enter a different routing server address (e.g., routing2:2121)")
+        st.session_state["conn"] = None
+        st.session_state["handler"] = None
+        return True
+    return False
+
+
+def parse_command_with_quotes(cmd: str) -> list:
+    """
+    Parse command line respecting quoted strings for filenames with spaces.
+    Examples:
+        'STOR file.txt' -> ['STOR', 'file.txt']
+        'STOR "file with spaces.txt"' -> ['STOR', 'file with spaces.txt']
+        'RETR "path/to/my file.zip" /tmp/dest' -> ['RETR', 'path/to/my file.zip', '/tmp/dest']
+    """
+    parts = []
+    current = ""
+    in_quotes = False
+    
+    for char in cmd.strip():
+        if char == '"':
+            in_quotes = not in_quotes
+        elif char == ' ' and not in_quotes:
+            if current:
+                parts.append(current)
+                current = ""
+        else:
+            current += char
+    
+    if current:
+        parts.append(current)
+    
+    return parts
+
+
 # --- UI ----------------------------------------------------------------------
 st.title("dFTP — Streamlit Client")
 
@@ -148,13 +222,18 @@ with col1:
     # A simple area to show last output
     if cmd_run and cmd:
         logger.info(f"[UI] Command executed: {cmd}")
+        
+        # Check connection health first
+        if not check_connection_health():
+            st.stop()
+        
         handler: ClientCommandHandler = st.session_state.get("handler")
         if not handler:
             logger.warning("[UI] Not connected")
             st.error("Not connected. Connect first.")
         else:
             try:
-                parts = cmd.strip().split()
+                parts = parse_command_with_quotes(cmd)
                 verb = parts[0].lower()
                 # Handle commands that require additional UI inputs
                 if verb == "stor":
@@ -166,7 +245,7 @@ with col1:
                         st.error("Select a file to upload using the uploader above.")
                     else:
                         # save to a temporary path
-                        local_path = f"/tmp/streamlit_upload_{int(time.time())}_{uploaded_file.name}"
+                        local_path = f"/tmp/{uploaded_file.name}"
                         logger.debug(f"[UI] STOR temp file: {local_path}")
                         with open(local_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
@@ -186,7 +265,8 @@ with col1:
                             p.progress(100)
                         if result["error"]:
                             logger.error(f"[UI] STOR error: {result['error']}")
-                            st.error(f"Error: {result['error']}")
+                            if not handle_connection_error(result['error']):
+                                st.error(f"Error: {result['error']}")
                         else:
                             out = result["value"]
                             logger.info(f"[UI] STOR completed: {out}")
@@ -210,12 +290,13 @@ with col1:
                                 st.success(f"STOR finished: {out}")
                 elif verb == "retr":
                     logger.info("[UI] RETR command handler")
+
                     if len(parts) < 2:
                         logger.error("[UI] Invalid RETR syntax")
                         st.error("Usage: RETR remote_filename [local_path]")
                     else:
                         remote = parts[1]
-                        local = parts[2] if len(parts) > 2 else f"/tmp/{remote}"
+                        local = parts[2] if len(parts) > 2 else f"\"/tmp/{remote}\""
                         logger.debug(f"[UI] RETR: {remote} -> {local}")
                         t, result = run_in_thread(handler._retr, remote, local)
                         with st.spinner("Downloading..."):
@@ -227,7 +308,8 @@ with col1:
                                 p.progress(i)
                         if result["error"]:
                             logger.error(f"[UI] RETR error: {result['error']}")
-                            st.error(f"Error: {result['error']}")
+                            if not handle_connection_error(result['error']):
+                                st.error(f"Error: {result['error']}")
                         else:
                             out = result["value"]
                             logger.info(f"[UI] RETR completed: {out}")
@@ -259,7 +341,8 @@ with col1:
                             time.sleep(0.05)
                     if result["error"]:
                         logger.error(f"[UI] {verb.upper()} error: {result['error']}")
-                        st.error(f"Error: {result['error']}")
+                        if not handle_connection_error(result['error']):
+                            st.error(f"Error: {result['error']}")
                     else:
                         val = result["value"]
                         logger.debug(f"[UI] {verb.upper()} result received")
@@ -298,8 +381,11 @@ with col1:
                             while t.is_alive():
                                 time.sleep(0.05)
                         if result["error"]:
-                            logger.error(f"[UI] Command error: {result['error']}")
-                            st.error(f"Error: {result['error']}")
+                            error = result["error"]
+                            logger.error(f"[UI] Command error: {error}")
+                            
+                            if not handle_connection_error(error):
+                                st.error(f"Error: {error}")
                         else:
                             out = result["value"]
                             logger.debug(f"[UI] Command result: {out}")
