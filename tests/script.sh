@@ -16,9 +16,9 @@ docker run --rm --name processing2 --net dftp_net -v $(pwd):/app dftp tests/run_
 docker run --rm --name processing3 --net dftp_net -v $(pwd):/app dftp tests/run_processing.py --id processing3 --port 9000
 
 # Routing Node
-docker run --rm --name routing1 --net dftp_net -p 2121:21 -v $(pwd):/app dftp tests/run_routing.py --id routing1 --port 9000
-docker run --rm --name routing2 --net dftp_net -p 2122:21 -v $(pwd):/app dftp tests/run_routing.py --id routing2 --port 9000
-docker run --rm --name routing3 --net dftp_net -p 2123:21 -v $(pwd):/app dftp tests/run_routing.py --id routing3 --port 9000
+docker run --rm --name routing1 --net dftp_net -p 2121:21 -v $(pwd):/app dftp tests/run_routing.py --id routing1 --internal-port 9000
+docker run --rm --name routing2 --net dftp_net -p 2122:21 -v $(pwd):/app dftp tests/run_routing.py --id routing2 --internal-port 9000
+docker run --rm --name routing3 --net dftp_net -p 2123:21 -v $(pwd):/app dftp tests/run_routing.py --id routing3 --internal-port 9000
 
 # Data Node
 docker run --rm --name data1 --net dftp_net -v $(pwd):/app dftp tests/run_data.py --id data1 --port 9000
