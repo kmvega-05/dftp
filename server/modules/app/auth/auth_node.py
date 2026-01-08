@@ -76,6 +76,9 @@ class AuthNode(GossipNode):
     def _ensure_users_file(self):
         users_file = self.get_users_file_path()
         users_dir = os.path.dirname(users_file)
+
+        if os.path.exists(users_file):
+            os.remove(users_file)
         try:
             os.makedirs(users_dir, exist_ok=True)
             if os.path.exists(users_file):
@@ -88,7 +91,8 @@ class AuthNode(GossipNode):
     def _create_sample_users(self, users_file: str):
         users = [
             {"username": "test", "password": bcrypt.hashpw(b"test123", bcrypt.gensalt()).decode("utf-8")},
-            {"username": "admin", "password": bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode("utf-8")}
+            {"username": "admin", "password": bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode("utf-8")},
+            {"username": "miguel", "password": bcrypt.hashpw(b"miguel123", bcrypt.gensalt()).decode("utf-8")}
         ]
         with open(users_file, "w") as f:
             json.dump({"users": users}, f, indent=4)
