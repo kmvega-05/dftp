@@ -119,7 +119,7 @@ class GossipNode(LocationNode):
                                 with self.merging_lock:
                                     logger.info("[%s] Merge de estado con peer %s (%s)", self.node_name, nodo_merge, peer_ip)
                                     self._merge_state(peer_ip)
-
+                                    logger.info("[%s] Merge con (%s) completado", self.node_name, peer_ip)
                                     for dst_ip in self.peers.values():
                                         if dst_ip == peer_ip:
                                             continue 

@@ -71,19 +71,23 @@ class DataNode(GossipNode):
             logger.warning("[%s] Merge solicitado pero nodo no inicializado aún, ignorando", self.node_name)
             return
         
+        # Copiar metadatos dentro del lock, pero luego liberar ANTES de enviar mensaje
         with self.data_lock:
             metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
-            msg = Message(type=MessageType.MERGE_STATE, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
-            try:
-                logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
-                response = self.send_message(peer_ip, 9000, msg, await_response=True, timeout=30)
-                logger.info("[%s] Recibido MERGE_STATE_ACK de %s", self.node_name, peer_ip)
-                if response and response.payload.get("metadatas"):
-                    for metadata in response.payload.get("metadatas", []):
-                        self._on_gossip_update({"op":"add", "metadata": metadata}, peer_ip=peer_ip)
-                logger.info("[%s] MERGE_STATE completado con %s", self.node_name, peer_ip)
-            except Exception as e:
-                logger.exception("[%s] Error durante MERGE_STATE con %s: %s", self.node_name, peer_ip, e)
+        
+        msg = Message(type=MessageType.MERGE_STATE, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
+        try:
+            logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
+            # Esperar respuesta SIN sostener el lock para evitar deadlock
+            response = self.send_message(peer_ip, 9000, msg, await_response=True, timeout=30)
+            logger.info("[%s] Recibido MERGE_STATE_ACK de %s", self.node_name, peer_ip)
+            
+            if response and response.payload.get("metadatas"):
+                for metadata in response.payload.get("metadatas", []):
+                    self._on_gossip_update({"op":"add", "metadata": metadata}, peer_ip=peer_ip)
+            logger.info("[%s] MERGE_STATE completado con %s", self.node_name, peer_ip)
+        except Exception as e:
+            logger.exception("[%s] Error durante MERGE_STATE con %s: %s", self.node_name, peer_ip, e)
 
     def _on_gossip_update(self, update: dict, peer_ip: str = None):
         """Aplica cambios recibidos via gossip (add/delete)."""
@@ -257,7 +261,7 @@ class DataNode(GossipNode):
                 daemon=True
             )
             serve_thread.start()
-            
+            logger.info("[%s] Hilo iniciado enviando confirmacion", self.node_name)
             return response
             
         except Exception as e:
@@ -953,4 +957,3 @@ class DataNode(GossipNode):
                 break  # nombre disponible
 
         return new_filename
-
