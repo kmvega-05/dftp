@@ -31,10 +31,17 @@ class DataNode(GossipNode):
         self.fs = FileSystemManager(fs_root)
         self._pasv_sockets: Dict[str, socket.socket] = {}
         self.metadata_table = MetadataTable(f"{fs_root}/metadata.json")
+        
+        # Flag to indicate when initialization is complete
+        self.initialized = False
 
         super().__init__(node_name=node_name, ip=ip, port=port, node_role=NodeType.DATA, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval)
 
         self._register_handlers()
+        
+        # Mark as initialized after all setup is complete
+        self.initialized = True
+        logger.info("[%s] DataNode completamente inicializado y listo para merge", self.node_name)
 
     # --------------------------------------------------
     # Registration
@@ -53,8 +60,17 @@ class DataNode(GossipNode):
         self.register_handler(MessageType.DATA_META_REQUEST, self._handle_data_meta_request)
         self.register_handler(MessageType.DATA_REPLICATE_FILE, self._handle_replicate_file)
         self.register_handler(MessageType.DATA_REPLICATE_READY, self._handle_replicate_ready)
+        # File sync during merge (using PASV-like socket transfer)
+        self.register_handler(MessageType.DATA_SYNC_FILE_REQUEST, self._handle_sync_file_request)
+        self.register_handler(MessageType.DATA_SYNC_FILE_READY, self._handle_sync_file_ready)
 
     def _merge_state(self, peer_ip):
+        # Don't merge until initialization is complete
+        logger.info("[DEBUG] Verificando si se paso el peer_ip correctamente desde %s", peer_ip)
+        if not self.initialized:
+            logger.warning("[%s] Merge solicitado pero nodo no inicializado aún, ignorando", self.node_name)
+            return
+        
         with self.data_lock:
             metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
             msg = Message(type=MessageType.MERGE_STATE, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
@@ -63,14 +79,13 @@ class DataNode(GossipNode):
                 response = self.send_message(peer_ip, 9000, msg, await_response=True, timeout=30)
                 logger.info("[%s] Recibido MERGE_STATE_ACK de %s", self.node_name, peer_ip)
                 if response and response.payload.get("metadatas"):
-                    for metadata in metadata_table_dict["metadatas"]:
-                        self._on_gossip_update({"op":"add", "metadata": metadata})
-                    pass
+                    for metadata in response.payload.get("metadatas", []):
+                        self._on_gossip_update({"op":"add", "metadata": metadata}, peer_ip=peer_ip)
                 logger.info("[%s] MERGE_STATE completado con %s", self.node_name, peer_ip)
             except Exception as e:
                 logger.exception("[%s] Error durante MERGE_STATE con %s: %s", self.node_name, peer_ip, e)
 
-    def _on_gossip_update(self, update: dict):
+    def _on_gossip_update(self, update: dict, peer_ip: str = None):
         """Aplica cambios recibidos via gossip (add/delete)."""
         op = update.get("op")
         metadata = update.get("metadata")
@@ -89,6 +104,21 @@ class DataNode(GossipNode):
                 fm = FileMetadata.from_dict(metadata)
                 self.metadata_table.upsert(fm)
                 logger.info("[%s] Metadato agregado via gossip: %s", self.node_name, metadata["filename"])
+                
+                # If peer_ip is provided and we don't have this file, request it from the peer
+                logger.info("[%s] Verificando necesidad de sincronizar archivo %s desde %s", self.node_name, metadata["filename"], peer_ip)
+                if peer_ip:
+                    # El filename en metadata es relativo a fs root
+                    local_path = os.path.join(self.fs.root_dir, metadata["filename"].lstrip("/"))
+                    if not os.path.exists(local_path):
+                        logger.info("[%s] Archivo no existe localmente, solicitando a %s: %s", self.node_name, peer_ip, metadata["filename"])
+                        # Start async file sync from peer
+                        sync_thread = threading.Thread(
+                            target=self._sync_file_from_peer,
+                            args=(peer_ip, metadata["filename"]),
+                            daemon=True
+                        )
+                        sync_thread.start()
 
 
     def _handle_merge_state(self, message: Message) -> Message:
@@ -96,14 +126,197 @@ class DataNode(GossipNode):
         Recibe MERGE_STATE de otro nodo, aplica los metadatos y retorna
         MERGE_STATE_ACK con el estado propio.
         """
-        logger.info("[%s] Recibiendo MERGE_STATE de %s", self.node_name, message.header.get("src"))
+        peer_ip = message.header.get("src")
+        logger.info("[%s] Recibiendo MERGE_STATE de %s", self.node_name, peer_ip)
         for metadata in message.payload.get("metadatas", []):
-            self._on_gossip_update({"op":"add", "metadata": metadata})
+            self._on_gossip_update({"op":"add", "metadata": metadata}, peer_ip=peer_ip)
 
         with self.data_lock:
             metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
-        logger.info("[%s] Enviando MERGE_STATE_ACK a %s", self.node_name, message.header.get("src"))
-        return Message(type=MessageType.MERGE_STATE_ACK, src=self.ip, dst=message.header.get("src"), payload=metadata_table_dict)
+        logger.info("[%s] Enviando MERGE_STATE_ACK a %s", self.node_name, peer_ip)
+        return Message(type=MessageType.MERGE_STATE_ACK, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
+    
+    def _sync_file_from_peer(self, peer_ip: str, filename: str):
+        """
+        Solicita un archivo al peer usando un socket PASV dedicado.
+        Se ejecuta en un hilo separado para no bloquear.
+        """
+        try:
+            logger.info("[%s] Iniciando sincronización de archivo %s desde %s", self.node_name, filename, peer_ip)
+            
+            # Enviar solicitud de sync - el peer abrirá un socket PASV
+            msg = Message(
+                type=MessageType.DATA_SYNC_FILE_REQUEST,
+                src=self.ip,
+                dst=peer_ip,
+                payload={"filename": filename}
+            )
+            
+            response = self.send_message(peer_ip, 9000, msg, await_response=True, timeout=30)
+            
+            if response and response.header.get("type") == MessageType.DATA_SYNC_FILE_READY:
+                # Recibimos el puerto PASV donde descargar el archivo
+                pasv_port = response.payload.get("pasv_port")
+                if pasv_port:
+                    self._download_file_from_pasv(peer_ip, pasv_port, filename)
+                else:
+                    logger.error("[%s] No se recibió puerto PASV para %s", self.node_name, filename)
+            else:
+                logger.error("[%s] No se pudo obtener puerto PASV para %s de %s", self.node_name, filename, peer_ip)
+                
+        except Exception as e:
+            logger.exception("[%s] Error durante sincronización de %s desde %s: %s", 
+                           self.node_name, filename, peer_ip, e)
+    
+    def _download_file_from_pasv(self, peer_ip: str, pasv_port: int, filename: str):
+        """
+        Descarga archivo del socket PASV del peer.
+        """
+        sock = None
+        try:
+            logger.info("[%s] Conectando a PASV en %s:%d para descargar %s", 
+                       self.node_name, peer_ip, pasv_port, filename)
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(300)  # 5 minutos de timeout
+            sock.connect((peer_ip, pasv_port))
+            
+            # Guardar archivo - filename es relativo a fs root
+            local_path = os.path.join(self.fs.root_dir, filename.lstrip("/"))
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            
+            file_size = 0
+            with open(local_path, "wb") as f:
+                while True:
+                    data = sock.recv(65536)  # 64KB chunks
+                    if not data:
+                        break
+                    f.write(data)
+                    file_size += len(data)
+            
+            logger.info("[%s] Archivo %s descargado desde %s (%d bytes)", 
+                       self.node_name, filename, peer_ip, file_size)
+            
+        except Exception as e:
+            logger.exception("[%s] Error descargando archivo %s desde %s:%d: %s", 
+                           self.node_name, filename, peer_ip, pasv_port, e)
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except:
+                    pass
+    
+    def _handle_sync_file_request(self, message: Message) -> Message:
+        """
+        Recibe solicitud de sincronización de archivo.
+        Abre un socket PASV para que el peer descargue el archivo.
+        """
+        filename = message.payload.get("filename")
+        peer_ip = message.header.get("src")
+        
+        logger.info("[%s] Recibida solicitud de sincronización para %s desde %s", 
+                   self.node_name, filename, peer_ip)
+        
+        try:
+            # filename es relativo a fs root
+            local_path = os.path.join(self.fs.root_dir, filename.lstrip("/"))
+            
+            if not os.path.exists(local_path):
+                logger.error("[%s] Archivo no existe: %s", self.node_name, filename)
+                return Message(
+                    type=MessageType.DATA_SYNC_FILE_READY,
+                    src=self.ip,
+                    dst=peer_ip,
+                    payload={"filename": filename, "status": "NOT_FOUND"}
+                )
+            
+            # Abrir socket PASV en un puerto disponible
+            pasv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            pasv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            pasv_sock.bind((self.ip, 0))  # Puerto automático
+            pasv_sock.listen(1)
+            pasv_port = pasv_sock.getsockname()[1]
+            
+            logger.info("[%s] Socket PASV abierto en puerto %d para archivo %s", 
+                       self.node_name, pasv_port, filename)
+            
+            # Responder con el puerto PASV
+            response = Message(
+                type=MessageType.DATA_SYNC_FILE_READY,
+                src=self.ip,
+                dst=peer_ip,
+                payload={"filename": filename, "pasv_port": pasv_port, "status": "READY"}
+            )
+            
+            # Iniciar hilo para servir el archivo
+            serve_thread = threading.Thread(
+                target=self._serve_file_on_pasv,
+                args=(pasv_sock, local_path),
+                daemon=True
+            )
+            serve_thread.start()
+            
+            return response
+            
+        except Exception as e:
+            logger.exception("[%s] Error preparando archivo %s para envío: %s", 
+                           self.node_name, filename, e)
+            return Message(
+                type=MessageType.DATA_SYNC_FILE_READY,
+                src=self.ip,
+                dst=peer_ip,
+                payload={"filename": filename, "status": "ERROR", "error": str(e)}
+            )
+    
+    def _serve_file_on_pasv(self, pasv_sock: socket.socket, local_path: str):
+        """
+        Sirve un archivo a través del socket PASV.
+        Se ejecuta en un hilo separado.
+        """
+        client_sock = None
+        try:
+            logger.debug("[%s] Esperando conexión PASV para archivo %s", self.node_name, local_path)
+            client_sock, client_addr = pasv_sock.accept()
+            logger.info("[%s] Cliente %s conectado a PASV para descargar %s", 
+                       self.node_name, client_addr, local_path)
+            
+            file_size = os.path.getsize(local_path)
+            
+            with open(local_path, "rb") as f:
+                bytes_sent = 0
+                while True:
+                    chunk = f.read(65536)  # 64KB chunks
+                    if not chunk:
+                        break
+                    client_sock.sendall(chunk)
+                    bytes_sent += len(chunk)
+            
+            logger.info("[%s] Archivo %s enviado via PASV (%d bytes)", 
+                       self.node_name, local_path, bytes_sent)
+            
+        except Exception as e:
+            logger.exception("[%s] Error sirviendo archivo %s por PASV: %s", 
+                           self.node_name, local_path, e)
+        finally:
+            if client_sock:
+                try:
+                    client_sock.close()
+                except:
+                    pass
+            if pasv_sock:
+                try:
+                    pasv_sock.close()
+                except:
+                    pass
+    
+    def _handle_sync_file_ready(self, message: Message) -> Message:
+        """
+        Manejador dummy para DATA_SYNC_FILE_READY.
+        Este mensaje es respuesta, no se espera como solicitud.
+        """
+        logger.warning("[%s] Recibido DATA_SYNC_FILE_READY sin esperarlo", self.node_name)
+        return None
     
     def _handle_cwd(self, message: Message):
         logger.info("[%s] Received DATA_CWD from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
@@ -434,7 +647,7 @@ class DataNode(GossipNode):
             virtual_path = self.fs.normalize_virtual_path(cwd, path)
 
             # Crear y guardar metadata local
-            file_metadata = FileMetadata(filename=virtual_path, version=version, transfer_id=transfer_id, timestamp=time.time())
+            file_metadata = FileMetadata(filename=path, version=version, transfer_id=transfer_id, timestamp=time.time())
             self.metadata_table.upsert(file_metadata)
             logger.info("[%s] Stored file %s and updated metadata", self.node_name, virtual_path)
 

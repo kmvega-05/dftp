@@ -84,6 +84,10 @@ class MessageType:
     DATA_PUSH = "DATA_PUSH"
     DATA_PUSH_ACK = "DATA_PUSH_ACK"
 
+    # Replicación de archivos durante merge state (usando sockets PASV)
+    DATA_SYNC_FILE_REQUEST = "DATA_SYNC_FILE_REQUEST"
+    DATA_SYNC_FILE_READY = "DATA_SYNC_FILE_READY"
+
     # Replicación Gossip
     GOSSIP_UPDATE = "GOSSIP_UPDATE"
     MERGE_STATE = "MERGE_STATE"
