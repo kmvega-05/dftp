@@ -108,8 +108,8 @@ class DataNode(GossipNode):
                 # If peer_ip is provided and we don't have this file, request it from the peer
                 logger.info("[%s] Verificando necesidad de sincronizar archivo %s desde %s", self.node_name, metadata["filename"], peer_ip)
                 if peer_ip:
-                    # El filename en metadata es relativo a fs root
-                    local_path = os.path.join(self.fs.root_dir, metadata["filename"].lstrip("/"))
+                    # El filename en metadata ahora incluye el namespace (ej: "anonymous/beltran.txt")
+                    local_path = os.path.join(self.fs.root_dir, metadata["filename"])
                     if not os.path.exists(local_path):
                         logger.info("[%s] Archivo no existe localmente, solicitando a %s: %s", self.node_name, peer_ip, metadata["filename"])
                         # Start async file sync from peer
@@ -181,8 +181,8 @@ class DataNode(GossipNode):
             sock.settimeout(300)  # 5 minutos de timeout
             sock.connect((peer_ip, pasv_port))
             
-            # Guardar archivo - filename es relativo a fs root
-            local_path = os.path.join(self.fs.root_dir, filename.lstrip("/"))
+            # Guardar archivo - filename incluye el namespace (ej: "anonymous/beltran.txt")
+            local_path = os.path.join(self.fs.root_dir, filename)
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             
             file_size = 0
@@ -219,11 +219,12 @@ class DataNode(GossipNode):
                    self.node_name, filename, peer_ip)
         
         try:
-            # filename es relativo a fs root
-            local_path = os.path.join(self.fs.root_dir, filename.lstrip("/"))
+            # filename ahora incluye el namespace (ej: "anonymous/beltran.txt")
+            # Resolver a ruta real: /tmp/ftp_root/anonymous/beltran.txt
+            local_path = os.path.join(self.fs.root_dir, filename)
             
             if not os.path.exists(local_path):
-                logger.error("[%s] Archivo no existe: %s", self.node_name, filename)
+                logger.error("[%s] Archivo no existe: %s (ruta real: %s)", self.node_name, filename, local_path)
                 return Message(
                     type=MessageType.DATA_SYNC_FILE_READY,
                     src=self.ip,
@@ -645,9 +646,13 @@ class DataNode(GossipNode):
                 self.fs.write_stream(namespace, cwd, path, data_gen(), chunk_size=chunk_size)
 
             virtual_path = self.fs.normalize_virtual_path(cwd, path)
+            
+            # Guardar ruta completa incluyendo namespace en metadata
+            # Formato: namespace/virtual_path (ej: "anonymous//beltran.txt")
+            full_metadata_path = os.path.join(user, virtual_path.lstrip("/"))
 
             # Crear y guardar metadata local
-            file_metadata = FileMetadata(filename=path, version=version, transfer_id=transfer_id, timestamp=time.time())
+            file_metadata = FileMetadata(filename=full_metadata_path, version=version, transfer_id=transfer_id, timestamp=time.time())
             self.metadata_table.upsert(file_metadata)
             logger.info("[%s] Stored file %s and updated metadata", self.node_name, virtual_path)
 
