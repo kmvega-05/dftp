@@ -111,39 +111,110 @@ class DataNode(GossipNode):
             logger.exception("[%s] Error durante MERGE_STATE con %s: %s", self.node_name, peer_ip, e)
 
     def _on_gossip_update(self, update: dict, peer_ip: str = None):
-        """Aplica cambios recibidos via gossip (add/delete)."""
+        """
+        Aplica cambios recibidos via gossip (add/delete).
+        
+        Maneja conflictos de nombres:
+        - Si dos archivos tienen el mismo nombre pero transfer_id diferente,
+          el archivo con MENOR transfer_id se renombra a file_copy.txt
+        - Se sincroniza el archivo del peer si no existe localmente
+        """
         op = update.get("op")
-        metadata = update.get("metadata")
-        if not op or not metadata:
+        metadata_dict = update.get("metadata")
+        if not op or not metadata_dict:
             return
+        
+        filename = metadata_dict["filename"]
+        transfer_id_incoming = metadata_dict["transfer_id"]
+        
         with self.data_lock:
             if op == "add":
-                # Check if metadata with same filename already exists
-                existing = self.metadata_table.get(metadata["filename"])
-                if existing and existing.to_dict()["transfer_id"] != metadata["transfer_id"]:
-                    # Rename to avoid conflict
-                    metadata["filename"] = metadata["filename"] + "_copy"
-                    logger.info("[%s] Metadato renombrado a %s para evitar conflicto", self.node_name, metadata["filename"])
+                existing = self.metadata_table.get(filename)
                 
-                # Add to metadata table
-                fm = FileMetadata.from_dict(metadata)
-                self.metadata_table.upsert(fm)
-                logger.info("[%s] Metadato agregado via gossip: %s", self.node_name, metadata["filename"])
+                if existing:
+                    existing_transfer_id = existing.to_dict()["transfer_id"]
+                    
+                    # Mismo transfer_id = mismo archivo, solo actualizar
+                    if existing_transfer_id == transfer_id_incoming:
+                        logger.info("[%s] Metadato ya existe con mismo transfer_id: %s", 
+                                   self.node_name, filename)
+                        return
+                    
+                    # Transfer_ids diferentes = conflicto de nombres, diferentes contenidos
+                    logger.info("[%s] Conflicto detectado: archivo %s con transfer_ids diferentes. "
+                               "Existente: %s, Incoming: %s", 
+                               self.node_name, filename, existing_transfer_id, transfer_id_incoming)
+                    
+                    # Determinar cuál renombrar: el de MENOR transfer_id
+                    if existing_transfer_id < transfer_id_incoming:
+                        # El archivo LOCAL tiene menor transfer_id → renombrar LOCAL
+                        logger.info("[%s] Local %s tiene transfer_id menor (%s < %s), renombrando local a copy",
+                                   self.node_name, filename, existing_transfer_id, transfer_id_incoming)
+                        
+                        # Renombrar archivo local
+                        name, ext = os.path.splitext(filename)
+                        renamed_filename = f"{name}_copy{ext}"
+                        
+                        old_local_path = os.path.join(self.fs.root_dir, filename)
+                        new_local_path = os.path.join(self.fs.root_dir, renamed_filename)
+                        
+                        if os.path.exists(old_local_path):
+                            try:
+                                os.rename(old_local_path, new_local_path)
+                                logger.info("[%s] Renombrado: %s → %s", self.node_name, 
+                                           filename, renamed_filename)
+                            except Exception as e:
+                                logger.error("[%s] Error renombrando archivo %s: %s", 
+                                           self.node_name, filename, e)
+                        
+                        # Actualizar metadatos del archivo local renombrado
+                        existing.filename = renamed_filename
+                        self.metadata_table.upsert(existing)
+                        
+                        # Ahora agregar el nuevo metadato (incoming) con el nombre original
+                        fm = FileMetadata.from_dict(metadata_dict)
+                        self.metadata_table.upsert(fm)
+                        logger.info("[%s] Metadato agregado para archivo incoming: %s", 
+                                   self.node_name, filename)
+                    else:
+                        # El archivo INCOMING tiene menor o igual transfer_id → renombrar INCOMING
+                        logger.info("[%s] Incoming %s tiene transfer_id menor o igual (%s <= %s), renombrando incoming a copy",
+                                   self.node_name, filename, transfer_id_incoming, existing_transfer_id)
+                        
+                        # Renombrar el metadato incoming
+                        name, ext = os.path.splitext(filename)
+                        renamed_filename = f"{name}_copy{ext}"
+                        metadata_dict["filename"] = renamed_filename
+                        
+                        fm = FileMetadata.from_dict(metadata_dict)
+                        self.metadata_table.upsert(fm)
+                        logger.info("[%s] Metadato agregado para archivo renombrado: %s", 
+                                   self.node_name, renamed_filename)
+                        
+                        # Actualizar filename para la sincronización
+                        filename = renamed_filename
+                else:
+                    # No existe conflicto, solo agregar
+                    fm = FileMetadata.from_dict(metadata_dict)
+                    self.metadata_table.upsert(fm)
+                    logger.info("[%s] Metadato agregado via gossip: %s (transfer_id: %s)", 
+                               self.node_name, filename, transfer_id_incoming)
                 
-                # If peer_ip is provided and we don't have this file, request it from the peer
-                logger.info("[%s] Verificando necesidad de sincronizar archivo %s desde %s", self.node_name, metadata["filename"], peer_ip)
+                # Verificar si necesitamos sincronizar el archivo desde el peer
                 if peer_ip:
-                    # El filename en metadata ahora incluye el namespace (ej: "anonymous/beltran.txt")
-                    local_path = os.path.join(self.fs.root_dir, metadata["filename"])
+                    local_path = os.path.join(self.fs.root_dir, filename)
                     if not os.path.exists(local_path):
-                        logger.info("[%s] Archivo no existe localmente, solicitando a %s: %s", self.node_name, peer_ip, metadata["filename"])
-                        # Start async file sync from peer
+                        logger.info("[%s] Archivo no existe localmente, solicitando a %s: %s", 
+                                   self.node_name, peer_ip, filename)
+                        # Iniciar sincronización async desde el peer
                         sync_thread = threading.Thread(
                             target=self._sync_file_from_peer,
-                            args=(peer_ip, metadata["filename"]),
+                            args=(peer_ip, filename),
                             daemon=True
                         )
                         sync_thread.start()
+                    else:
+                        logger.info("[%s] Archivo ya existe localmente: %s", self.node_name, filename)
 
     def _handle_send_state(self, message):
         peer_ip = message.header.get("src")
