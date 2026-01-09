@@ -63,6 +63,27 @@ class DataNode(GossipNode):
         # File sync during merge (using PASV-like socket transfer)
         self.register_handler(MessageType.DATA_SYNC_FILE_REQUEST, self._handle_sync_file_request)
         self.register_handler(MessageType.DATA_SYNC_FILE_READY, self._handle_sync_file_ready)
+        self.register_handler(MessageType.SEND_STATE, self._handle_send_state)
+
+    def send_state(self, peer_ip):
+        # Don't merge until initialization is complete
+        logger.info("[DEBUG] Verificando si se paso el peer_ip correctamente desde %s", peer_ip)
+        if not self.initialized:
+            logger.warning("[%s] Merge solicitado pero nodo no inicializado aún, ignorando", self.node_name)
+            return
+        
+        # Copiar metadatos dentro del lock, pero luego liberar ANTES de enviar mensaje
+        with self.data_lock:
+            metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
+        
+        msg = Message(type=MessageType.SEND_STATE, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
+        try:
+            logger.info("[%s] Enviando SEND_STATE a %s", self.node_name, peer_ip)
+            # Esperar respuesta SIN sostener el lock para evitar deadlock
+            self.send_message(peer_ip, 9000, msg, await_response=False, timeout=30)
+            logger.info("[%s] Recibido SEND_STATE_ACK de %s", self.node_name, peer_ip)
+        except Exception as e:
+            logger.exception("[%s] Error durante SEND_STATE con %s: %s", self.node_name, peer_ip, e)
 
     def _merge_state(self, peer_ip):
         # Don't merge until initialization is complete
@@ -99,7 +120,7 @@ class DataNode(GossipNode):
             if op == "add":
                 # Check if metadata with same filename already exists
                 existing = self.metadata_table.get(metadata["filename"])
-                if existing:
+                if existing and existing.to_dict()["transfer_id"] != metadata["transfer_id"]:
                     # Rename to avoid conflict
                     metadata["filename"] = metadata["filename"] + "_copy"
                     logger.info("[%s] Metadato renombrado a %s para evitar conflicto", self.node_name, metadata["filename"])
@@ -124,7 +145,12 @@ class DataNode(GossipNode):
                         )
                         sync_thread.start()
 
-
+    def _handle_send_state(self, message):
+        peer_ip = message.header.get("src")
+        logger.info("[%s] Recibiendo MERGE_STATE de %s", self.node_name, peer_ip)
+        for metadata in message.payload.get("metadatas", []):
+            self._on_gossip_update({"op":"add", "metadata": metadata}, peer_ip=peer_ip)
+    
     def _handle_merge_state(self, message: Message) -> Message:
         """
         Recibe MERGE_STATE de otro nodo, aplica los metadatos y retorna
