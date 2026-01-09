@@ -6,6 +6,7 @@ import time
 import uuid
 
 from typing import Dict
+from server.modules.consistency.gossip_node import GossipNode
 from server.modules.discovery import LocationNode, NodeType
 from server.modules.comm import Message, MessageType
 from server.modules.app.data_node.file_system_manager import FileSystemManager, SecurityError
@@ -15,7 +16,7 @@ logger = logging.getLogger("dftp.app.data_node")
 
 K_REPLICAS = int(os.environ.get("DATA_NODE_REPLICATION_K", 1))
 
-class DataNode(LocationNode):
+class DataNode(GossipNode):
     """
     DataNode:
     - Maneja operaciones de filesystem (lectura/escritura) para los clientes FTP.
@@ -23,16 +24,15 @@ class DataNode(LocationNode):
     - Garantiza seguridad de paths y bloqueo concurrente usando FileSystemManager.
     """
     def __init__(self, node_name: str, ip: str, port: int, fs_root : str, discovery_timeout : float = 0.8, heartbeat_interval: int = 2):
+        # Initialize ALL attributes BEFORE calling super().__init__() to avoid race conditions
+        # when the gossip thread tries to use _merge_state() or other methods
+        self.data_lock = threading.Lock()
+        self._lock = threading.Lock()
+        self.fs = FileSystemManager(fs_root)
+        self._pasv_sockets: Dict[str, socket.socket] = {}
+        self.metadata_table = MetadataTable(f"{fs_root}/metadata.json")
 
         super().__init__(node_name=node_name, ip=ip, port=port, node_role=NodeType.DATA, discovery_timeout=discovery_timeout, heartbeat_interval=heartbeat_interval)
-
-        self.fs = FileSystemManager(fs_root)
-
-        # session_id -> passive socket
-        self._pasv_sockets: Dict[str, socket.socket] = {}
-        self._lock = threading.Lock()
-
-        self.metadata_table = MetadataTable(f"{fs_root}/metadata.json")
 
         self._register_handlers()
 
@@ -54,6 +54,57 @@ class DataNode(LocationNode):
         self.register_handler(MessageType.DATA_REPLICATE_FILE, self._handle_replicate_file)
         self.register_handler(MessageType.DATA_REPLICATE_READY, self._handle_replicate_ready)
 
+    def _merge_state(self, peer_ip):
+        with self.data_lock:
+            metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
+            msg = Message(type=MessageType.MERGE_STATE, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
+            try:
+                logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
+                response = self.send_message(peer_ip, 9000, msg, await_response=True, timeout=30)
+                logger.info("[%s] Recibido MERGE_STATE_ACK de %s", self.node_name, peer_ip)
+                if response and response.payload.get("metadatas"):
+                    for metadata in metadata_table_dict["metadatas"]:
+                        self._on_gossip_update({"op":"add", "metadata": metadata})
+                    pass
+                logger.info("[%s] MERGE_STATE completado con %s", self.node_name, peer_ip)
+            except Exception as e:
+                logger.exception("[%s] Error durante MERGE_STATE con %s: %s", self.node_name, peer_ip, e)
+
+    def _on_gossip_update(self, update: dict):
+        """Aplica cambios recibidos via gossip (add/delete)."""
+        op = update.get("op")
+        metadata = update.get("metadata")
+        if not op or not metadata:
+            return
+        with self.data_lock:
+            if op == "add":
+                # Check if metadata with same filename already exists
+                existing = self.metadata_table.get(metadata["filename"])
+                if existing:
+                    # Rename to avoid conflict
+                    metadata["filename"] = metadata["filename"] + "_copy"
+                    logger.info("[%s] Metadato renombrado a %s para evitar conflicto", self.node_name, metadata["filename"])
+                
+                # Add to metadata table
+                fm = FileMetadata.from_dict(metadata)
+                self.metadata_table.upsert(fm)
+                logger.info("[%s] Metadato agregado via gossip: %s", self.node_name, metadata["filename"])
+
+
+    def _handle_merge_state(self, message: Message) -> Message:
+        """
+        Recibe MERGE_STATE de otro nodo, aplica los metadatos y retorna
+        MERGE_STATE_ACK con el estado propio.
+        """
+        logger.info("[%s] Recibiendo MERGE_STATE de %s", self.node_name, message.header.get("src"))
+        for metadata in message.payload.get("metadatas", []):
+            self._on_gossip_update({"op":"add", "metadata": metadata})
+
+        with self.data_lock:
+            metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
+        logger.info("[%s] Enviando MERGE_STATE_ACK a %s", self.node_name, message.header.get("src"))
+        return Message(type=MessageType.MERGE_STATE_ACK, src=self.ip, dst=message.header.get("src"), payload=metadata_table_dict)
+    
     def _handle_cwd(self, message: Message):
         logger.info("[%s] Received DATA_CWD from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
         user = message.payload.get("user")
