@@ -78,13 +78,19 @@ class DataNode(GossipNode):
             logger.warning("[%s] Merge solicitado pero nodo no inicializado aún, ignorando", self.node_name)
             return
         
-        # Copiar metadatos dentro del lock, pero luego liberar ANTES de enviar mensaje
+        # Copiar metadatos y estructura de directorios dentro del lock, pero luego liberar ANTES de enviar mensaje
         with self.data_lock:
             metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
+            dir_structure = self._export_directory_structure()
         
-        msg = Message(type=MessageType.SEND_STATE, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
+        payload = {
+            "metadatas": metadata_table_dict.get("metadatas", []),
+            "directories": dir_structure
+        }
+        
+        msg = Message(type=MessageType.SEND_STATE, src=self.ip, dst=peer_ip, payload=payload)
         try:
-            logger.info("[%s] Enviando SEND_STATE a %s", self.node_name, peer_ip)
+            logger.info("[%s] Enviando SEND_STATE a %s (con %d directorios)", self.node_name, peer_ip, len(dir_structure))
             # Esperar respuesta SIN sostener el lock para evitar deadlock
             self.send_message(peer_ip, 9000, msg, await_response=False, timeout=30)
             logger.info("[%s] Recibido SEND_STATE_ACK de %s", self.node_name, peer_ip)
@@ -98,17 +104,29 @@ class DataNode(GossipNode):
             logger.warning("[%s] Merge solicitado pero nodo no inicializado aún, ignorando", self.node_name)
             return
         
-        # Copiar metadatos dentro del lock, pero luego liberar ANTES de enviar mensaje
+        # Copiar metadatos y estructura de directorios dentro del lock, pero luego liberar ANTES de enviar mensaje
         with self.data_lock:
             metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
+            dir_structure = self._export_directory_structure()
         
-        msg = Message(type=MessageType.MERGE_STATE, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
+        payload = {
+            "metadatas": metadata_table_dict.get("metadatas", []),
+            "directories": dir_structure
+        }
+        
+        msg = Message(type=MessageType.MERGE_STATE, src=self.ip, dst=peer_ip, payload=payload)
         try:
-            logger.info("[%s] Enviando MERGE_STATE a %s", self.node_name, peer_ip)
+            logger.info("[%s] Enviando MERGE_STATE a %s (con %d directorios)", self.node_name, peer_ip, len(dir_structure))
             # Esperar respuesta SIN sostener el lock para evitar deadlock
             response = self.send_message(peer_ip, 9000, msg, await_response=True, timeout=30)
             logger.info("[%s] Recibido MERGE_STATE_ACK de %s", self.node_name, peer_ip)
             
+            # Procesar directorios del peer
+            if response and response.payload.get("directories"):
+                logger.info("[%s] Importando %d directorios del peer", self.node_name, len(response.payload.get("directories", [])))
+                self._import_directory_structure(response.payload.get("directories", []))
+            
+            # Procesar archivos del peer
             if response and response.payload.get("metadatas"):
                 for metadata in response.payload.get("metadatas", []):
                     self._on_gossip_update({"op":"add", "metadata": metadata}, peer_ip=peer_ip)
@@ -224,24 +242,43 @@ class DataNode(GossipNode):
 
     def _handle_send_state(self, message):
         peer_ip = message.header.get("src")
-        logger.info("[%s] Recibiendo MERGE_STATE de %s", self.node_name, peer_ip)
+        logger.info("[%s] Recibiendo SEND_STATE de %s (con %d directorios)", self.node_name, peer_ip, len(message.payload.get("directories", [])))
+        
+        # Importar estructura de directorios primero
+        if message.payload.get("directories"):
+            self._import_directory_structure(message.payload.get("directories", []))
+        
+        # Luego importar metadatos de archivos
         for metadata in message.payload.get("metadatas", []):
             self._on_gossip_update({"op":"add", "metadata": metadata}, peer_ip=peer_ip)
     
     def _handle_merge_state(self, message: Message) -> Message:
         """
-        Recibe MERGE_STATE de otro nodo, aplica los metadatos y retorna
-        MERGE_STATE_ACK con el estado propio.
+        Recibe MERGE_STATE de otro nodo, aplica los metadatos y estructura de directorios,
+        y retorna MERGE_STATE_ACK con el estado propio.
         """
         peer_ip = message.header.get("src")
-        logger.info("[%s] Recibiendo MERGE_STATE de %s", self.node_name, peer_ip)
+        logger.info("[%s] Recibiendo MERGE_STATE de %s (con %d directorios)", self.node_name, peer_ip, len(message.payload.get("directories", [])))
+        
+        # Importar estructura de directorios primero
+        if message.payload.get("directories"):
+            self._import_directory_structure(message.payload.get("directories", []))
+        
+        # Luego importar metadatos de archivos
         for metadata in message.payload.get("metadatas", []):
             self._on_gossip_update({"op":"add", "metadata": metadata}, peer_ip=peer_ip)
 
         with self.data_lock:
             metadata_table_dict = {"metadatas":[m.to_dict() for m in self.metadata_table.all()]}
-        logger.info("[%s] Enviando MERGE_STATE_ACK a %s", self.node_name, peer_ip)
-        return Message(type=MessageType.MERGE_STATE_ACK, src=self.ip, dst=peer_ip, payload=metadata_table_dict)
+            dir_structure = self._export_directory_structure()
+        
+        payload = {
+            "metadatas": metadata_table_dict.get("metadatas", []),
+            "directories": dir_structure
+        }
+        
+        logger.info("[%s] Enviando MERGE_STATE_ACK a %s (con %d directorios)", self.node_name, peer_ip, len(dir_structure))
+        return Message(type=MessageType.MERGE_STATE_ACK, src=self.ip, dst=peer_ip, payload=payload)
     
     def _sync_file_from_peer(self, peer_ip: str, filename: str):
         """
@@ -1415,4 +1452,105 @@ class DataNode(GossipNode):
         except Exception as e:
             logger.exception("[%s] Error replicating rename: %s", self.node_name, e)
             return Message(MessageType.DATA_REPLICATE_RENAME, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "error", "message": str(e)})
+
+    # --------------------------------------------------
+    # Directory Structure Export/Import (MERGE_STATE)
+    # --------------------------------------------------
+
+    def _export_directory_structure(self) -> list:
+        """
+        Exporta la estructura completa de directorios para todos los usuarios/namespaces.
+        Retorna una lista de paths virtuales de directorios que existen en este nodo.
+        
+        Ejemplo:
+        [
+            {"user": "anonymous", "virtual_path": "/"},
+            {"user": "anonymous", "virtual_path": "/docs"},
+            {"user": "anonymous", "virtual_path": "/docs/subfolder"},
+            {"user": "beltran", "virtual_path": "/"},
+            {"user": "beltran", "virtual_path": "/uploads"},
+        ]
+        """
+        directories = []
+        
+        try:
+            # Iterar por cada namespace (usuario)
+            root_path = self.fs.root_dir
+            if not os.path.exists(root_path):
+                return directories
+            
+            for namespace in os.listdir(root_path):
+                namespace_full_path = os.path.join(root_path, namespace)
+                
+                if not os.path.isdir(namespace_full_path):
+                    continue
+                
+                # Recolectar todos los directorios en este namespace
+                for dirpath, dirnames, filenames in os.walk(namespace_full_path):
+                    # Convertir a path virtual relativo al namespace
+                    rel_path = os.path.relpath(dirpath, namespace_full_path)
+                    
+                    if rel_path == ".":
+                        virtual_path = "/"
+                    else:
+                        # Convertir a posix path y agregar /
+                        virtual_path = "/" + rel_path.replace(os.sep, "/")
+                    
+                    directories.append({
+                        "user": namespace,
+                        "virtual_path": virtual_path
+                    })
+                    
+                    logger.debug("[%s] Exported dir: user=%s, path=%s", self.node_name, namespace, virtual_path)
+            
+            logger.info("[%s] Exported %d directories", self.node_name, len(directories))
+            return directories
+        
+        except Exception as e:
+            logger.exception("[%s] Error exporting directory structure: %s", self.node_name, e)
+            return directories
+
+    def _import_directory_structure(self, directories: list) -> None:
+        """
+        Importa una estructura de directorios desde otro nodo durante merge.
+        Crea todos los directorios que no existan localmente.
+        
+        Args:
+            directories: Lista de dicts con {"user": namespace, "virtual_path": path}
+        """
+        created_count = 0
+        skipped_count = 0
+        
+        try:
+            for dir_info in directories:
+                user = dir_info.get("user")
+                virtual_path = dir_info.get("virtual_path")
+                
+                if not user or not virtual_path:
+                    logger.warning("[%s] Invalid directory info: %s", self.node_name, dir_info)
+                    continue
+                
+                try:
+                    namespace = self.fs.get_namespace(user)
+                    
+                    # Convertir path virtual a path real
+                    real_path = self.fs.virtual_to_real_path(namespace, virtual_path)
+                    
+                    # Crear directorio si no existe
+                    if not os.path.exists(real_path):
+                        os.makedirs(real_path, exist_ok=True)
+                        logger.info("[%s] Created directory: user=%s, path=%s", self.node_name, user, virtual_path)
+                        created_count += 1
+                    else:
+                        logger.debug("[%s] Directory already exists: user=%s, path=%s", self.node_name, user, virtual_path)
+                        skipped_count += 1
+                
+                except Exception as e:
+                    logger.warning("[%s] Error creating directory %s/%s: %s", self.node_name, user, virtual_path, e)
+            
+            logger.info("[%s] Imported directory structure: created=%d, skipped=%d", self.node_name, created_count, skipped_count)
+        
+        except Exception as e:
+            logger.exception("[%s] Error importing directory structure: %s", self.node_name, e)
                          payload={}, metadata={"status": "error", "message": str(e)})
