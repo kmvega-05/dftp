@@ -1553,3 +1553,4 @@ class DataNode(GossipNode):
         
         except Exception as e:
             logger.exception("[%s] Error importing directory structure: %s", self.node_name, e)
+                         payload={}, metadata={"status": "error", "message": str(e)})
