@@ -23,6 +23,7 @@ class Parser:
         code = data[:3]
         
         # Validate that code is actually 3 digits
+        logger.info(f"[CLIENT] Respuesta recibida {data}")
         if not code.isdigit() or len(code) != 3:
             logger.error(f"Invalid FTP response format: {data} (code={code})")
             return MessageStructure("000", data, "unknown")

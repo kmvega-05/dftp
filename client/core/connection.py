@@ -4,7 +4,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ControlConnectionManager:
-    # TODO: Crear signals para la interfaz grafica
     def __init__(self, host: str, port: int, timeout: float = 10.0):
         self.host = host
         self.port = port 

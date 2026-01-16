@@ -28,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-st.set_page_config(page_title="dFTP Client UI", layout="wide")
+st.set_page_config(page_title="dFTP Client", layout="wide")
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -96,7 +96,7 @@ def handle_connection_error(error):
     return False
 
 
-def parse_command_with_quotes(cmd: str) -> list:
+def parse_command_with_quotes(cmd: str) -> list[str]:
     """
     Parse command line respecting quoted strings for filenames with spaces.
     Examples:
@@ -125,7 +125,7 @@ def parse_command_with_quotes(cmd: str) -> list:
 
 
 # --- UI ----------------------------------------------------------------------
-st.title("dFTP — Streamlit Client")
+st.title("dFTP — Client")
 
 with st.sidebar:
     st.header("Connection")
@@ -296,16 +296,20 @@ with col1:
                         st.error("Usage: RETR remote_filename [local_path]")
                     else:
                         remote = parts[1]
-                        local = parts[2] if len(parts) > 2 else f"\"/tmp/{remote}\""
+                        local = parts[2] if len(parts) > 2 else f"/tmp/{remote}"
                         logger.debug(f"[UI] RETR: {remote} -> {local}")
                         t, result = run_in_thread(handler._retr, remote, local)
                         with st.spinner("Downloading..."):
                             p = st.progress(0)
-                            i = 0
+                            start = time.time()
                             while t.is_alive():
-                                time.sleep(0.15)
-                                i = min(100, i+5)
-                                p.progress(i)
+                                time.sleep(0.1)
+                                # animate progress while the upload runs. Keep value <100 until finished
+                                elapsed = time.time() - start
+                                value = min(99, int((elapsed * 10) % 100))
+                                p.progress(value)
+                            # ensure progress shows complete when done
+                            p.progress(100)
                         if result["error"]:
                             logger.error(f"[UI] RETR error: {result['error']}")
                             if not handle_connection_error(result['error']):
