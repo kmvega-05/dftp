@@ -28,7 +28,7 @@ def handle_retr(cmd: Command, data: dict = None, processing_node=None) -> tuple[
     logger.info("Finding newest version of file")
     for node in data_nodes:
         try:
-            meta_resp = processing_node.send_message(node["ip"], 9000, Message(type=MessageType.DATA_META_REQUEST, src=processing_node.ip, dst=node["ip"], payload={"filename": filename, "cwd": session.get_cwd()}), await_response=True, timeout=30)
+            meta_resp = processing_node.send_message(node["ip"], 9000, Message(type=MessageType.DATA_META_REQUEST, src=processing_node.ip, dst=node["ip"], payload={"filename": filename, "cwd": session.get_cwd(), "user": session.get_username()}), await_response=True, timeout=30)
             
             logger.info("Response from %s : %s", node['ip'], meta_resp)
 

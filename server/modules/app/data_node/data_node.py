@@ -1,3 +1,4 @@
+import posixpath
 import socket
 import threading
 import logging
@@ -60,6 +61,11 @@ class DataNode(GossipNode):
         self.register_handler(MessageType.DATA_META_REQUEST, self._handle_data_meta_request)
         self.register_handler(MessageType.DATA_REPLICATE_FILE, self._handle_replicate_file)
         self.register_handler(MessageType.DATA_REPLICATE_READY, self._handle_replicate_ready)
+        # Replicación de directorios y eliminaciones
+        self.register_handler(MessageType.DATA_REPLICATE_DIR_CREATE, self._handle_replicate_dir_create)
+        self.register_handler(MessageType.DATA_REPLICATE_DIR_DELETE, self._handle_replicate_dir_delete)
+        self.register_handler(MessageType.DATA_REPLICATE_FILE_DELETE, self._handle_replicate_file_delete)
+        self.register_handler(MessageType.DATA_REPLICATE_RENAME, self._handle_replicate_rename)
         # File sync during merge (using PASV-like socket transfer)
         self.register_handler(MessageType.DATA_SYNC_FILE_REQUEST, self._handle_sync_file_request)
         self.register_handler(MessageType.DATA_SYNC_FILE_READY, self._handle_sync_file_ready)
@@ -462,6 +468,11 @@ class DataNode(GossipNode):
             namespace = self.fs.get_namespace(user)
             logger.info("[%s] Creating directory for %s: %s/%s", self.node_name, user, cwd, path)
             self.fs.make_dir(namespace, cwd, path)
+            
+            # Replicate directory creation to other DataNodes
+            virtual_path = self.fs.normalize_virtual_path(cwd, path)
+            self._replicate_dir_create(user, virtual_path)
+            
             logger.info("[%s] DATA_MKD success for %s: %s/%s", self.node_name, user, cwd, path)
             return Message(MessageType.DATA_MKD_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
@@ -493,6 +504,13 @@ class DataNode(GossipNode):
                 self.fs.remove_dir(namespace, cwd, path)
 
             virtual_path = self.fs.normalize_virtual_path(cwd, path)
+            
+            # Replicate removal to other DataNodes
+            if target_type == "file":
+                self._replicate_file_delete(user, virtual_path)
+            else:
+                self._replicate_dir_delete(user, virtual_path)
+            
             logger.info("[%s] DATA_REMOVE success for %s: %s", self.node_name, user, virtual_path)
             return Message(MessageType.DATA_REMOVE_ACK, self.ip, message.header.get("src"), payload={"path": virtual_path}, metadata={"status": "OK"})
 
@@ -524,6 +542,12 @@ class DataNode(GossipNode):
             root_dir = self.fs.get_namespace(user)
             logger.info("[%s] Renaming %s:%s -> %s", self.node_name, user, old_path, new_path)
             self.fs.rename_path(root_dir, cwd, old_path, new_path)
+            
+            # Replicate rename to other DataNodes
+            old_virtual_path = self.fs.normalize_virtual_path(cwd, old_path)
+            new_virtual_path = self.fs.normalize_virtual_path(cwd, new_path)
+            self._replicate_rename(user, old_virtual_path, new_virtual_path)
+            
             logger.info("[%s] DATA_RENAME success for %s: %s -> %s", self.node_name, user, old_path, new_path)
             return Message(MessageType.DATA_RENAME_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "OK"})
 
@@ -674,17 +698,40 @@ class DataNode(GossipNode):
         if not all([session_id, user, cwd, path]):
             return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "Missing required arguments"})
 
-        sock = self._consume_pasv_socket(session_id)
-        if not sock:
-            return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": "No passive socket for session"})
-
+        # *** VERIFICAR EXISTENCIA DEL ARCHIVO ANTES DE CONSUMIR EL SOCKET ***
         try:
             namespace = self.fs.get_namespace(user)
+            
+            # Normalizar path y verificar existencia
+            virtual_path = self.fs.normalize_virtual_path(cwd, path)
+            real_path = self.fs.virtual_to_real_path(namespace, virtual_path)
+            
+            logger.info("[%s] RETR: user=%s, cwd=%s, path=%s → virtual_path=%s, real_path=%s", 
+                       self.node_name, user, cwd, path, virtual_path, real_path)
+            
+            if not os.path.exists(real_path) or not os.path.isfile(real_path):
+                logger.error("[%s] RETR: Archivo no existe o no es archivo: %s", self.node_name, real_path)
+                # Retornar error SIN consumir el socket PASV
+                return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), 
+                             payload={}, metadata={"status": "error", "message": f"File not found: {path}"})
+        except Exception as e:
+            logger.exception("[%s] RETR: Error validando archivo: %s", self.node_name, e)
+            return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), 
+                         payload={}, metadata={"status": "error", "message": str(e)})
+        
+        # *** AHORA SÍ CONSUMIR EL SOCKET PASV ***
+        sock = self._consume_pasv_socket(session_id)
+        if not sock:
+            return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), 
+                         payload={}, metadata={"status": "error", "message": "No passive socket for session"})
+
+        try:
+            # Crear generator DESPUÉS de verificar que el archivo existe
             generator = self.fs.read_stream(namespace, cwd, path, chunk_size=chunk_size)
 
             # Avisamos al routing node que ya puede enviar el 150 al cliente
             logger.info("[%s] Notifying processing node %s DATA_READY for session %s", self.node_name, message.header.get("src"), session_id)
-            self.send_message(message.header.get("src"), 9000, Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id}))
+            self.send_message(message.header.get("src"), 9000, Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id}), await_response=False)
 
             conn, addr = sock.accept()
             logger.info("[%s] Sending file for session %s...", self.node_name, session_id)
@@ -694,7 +741,7 @@ class DataNode(GossipNode):
             logger.info("[%s] File sent for session %s", self.node_name, session_id)
 
         except Exception as e:
-            logger.exception(str(e))
+            logger.exception("[%s] RETR transfer error: %s", self.node_name, str(e))
             return Message(MessageType.DATA_RETR_FILE_ACK, self.ip, message.header.get("src"), payload={}, metadata={"status": "error", "message": str(e)})
         
         finally:
@@ -731,7 +778,7 @@ class DataNode(GossipNode):
 
             # Avisamos al routing node que puede enviar el 150
             logger.info("[%s] Notifying processing node %s DATA_READY for session %s", self.node_name, message.header.get("src"), session_id)
-            self.send_message(message.header.get("src"), 9000,Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id}))
+            self.send_message(message.header.get("src"), 9000, Message(MessageType.DATA_READY, self.ip, message.header.get("src"), payload={"session_id": session_id}), await_response=False)
 
             # Guardar archivo localmente
             conn, addr = sock.accept()
@@ -749,8 +796,9 @@ class DataNode(GossipNode):
             virtual_path = self.fs.normalize_virtual_path(cwd, path)
             
             # Guardar ruta completa incluyendo namespace en metadata
-            # Formato: namespace/virtual_path (ej: "anonymous//beltran.txt")
-            full_metadata_path = os.path.join(user, virtual_path.lstrip("/"))
+            # Formato: namespace/virtual_path (ej: "anonymous/beltran.txt")
+            # IMPORTANTE: usar posixpath para consistencia multiplataforma
+            full_metadata_path = posixpath.join(user, virtual_path.lstrip("/"))
 
             # Crear y guardar metadata local
             file_metadata = FileMetadata(filename=full_metadata_path, version=version, transfer_id=transfer_id, timestamp=time.time())
@@ -798,18 +846,35 @@ class DataNode(GossipNode):
         """
         Maneja DATA_META_REQUEST.
         Devuelve metadatos de un archivo específico o de todos los archivos.
+        
+        Payload esperado:
+            - filename: str (nombre del archivo a buscar)
+            - cwd: str (directorio actual del cliente)
+            - user: str (usuario/namespace - REQUERIDO para buscar correctamente)
         """
         payload = message.payload or {}
         filename = payload.get("filename")
         cwd = payload.get("cwd", "/")
+        user = payload.get("user")  # NUEVO: obtener el usuario
 
         logger.info("[%s] Received DATA_META_REQUEST from %s payload=%s", self.node_name, message.header.get("src"), message.payload)
-        logger.info("[%s] Buscando archivo: %s", self.node_name, filename)
+        logger.info("[%s] Buscando archivo: filename=%s, cwd=%s, user=%s", self.node_name, filename, cwd, user)
         try:
             if filename:
+                # Normalizar path virtual
                 virtual_path = self.fs.normalize_virtual_path(cwd, filename)
-                meta = self.metadata_table.get(virtual_path)
-                logger.info("[%s] Found : %s", self.node_name, meta)
+                
+                # Construir la ruta completa con namespace (igual que en STOR)
+                # Si user no viene, buscar en metadata table directamente
+                if user:
+                    full_metadata_path = posixpath.join(user, virtual_path.lstrip("/"))
+                    logger.info("[%s] Buscando con ruta completa: %s", self.node_name, full_metadata_path)
+                    meta = self.metadata_table.get(full_metadata_path)
+                else:
+                    logger.info("[%s] Sin user, buscando solo por virtual_path: %s", self.node_name, virtual_path)
+                    meta = self.metadata_table.get(virtual_path)
+                
+                logger.info("[%s] Found: %s", self.node_name, meta)
                 metadata = [meta.to_dict()] if meta else []
             
             else:
@@ -1054,3 +1119,300 @@ class DataNode(GossipNode):
                 break  # nombre disponible
 
         return new_filename
+
+    # --------------------------------------------------
+    # Directory and File Replication (MKD, RMD, DELE)
+    # --------------------------------------------------
+
+    def _replicate_dir_create(self, user: str, virtual_path: str):
+        """
+        Replica la creación de un directorio a todos los otros DataNodes.
+        Se ejecuta en un hilo separado para no bloquear la operación original.
+        """
+        def broadcast():
+            try:
+                peer_nodes = self.query_by_role(NodeType.DATA)
+                for peer in peer_nodes:
+                    if peer["ip"] == self.ip:
+                        continue  # No enviar a uno mismo
+                    
+                    logger.info("[%s] Replicating dir create to %s: %s", self.node_name, peer["ip"], virtual_path)
+                    try:
+                        self.send_message(
+                            peer["ip"], 9000,
+                            Message(
+                                type=MessageType.DATA_REPLICATE_DIR_CREATE,
+                                src=self.ip,
+                                dst=peer["ip"],
+                                payload={"user": user, "virtual_path": virtual_path}
+                            ),
+                            await_response=False
+                        )
+                    except Exception as e:
+                        logger.warning("[%s] Failed to replicate dir create to %s: %s", self.node_name, peer["ip"], e)
+            except Exception as e:
+                logger.warning("[%s] Error broadcasting dir create: %s", self.node_name, e)
+        
+        t = threading.Thread(target=broadcast, daemon=True)
+        t.start()
+
+    def _replicate_dir_delete(self, user: str, virtual_path: str):
+        """
+        Replica la eliminación de un directorio a todos los otros DataNodes.
+        Se ejecuta en un hilo separado para no bloquear la operación original.
+        """
+        def broadcast():
+            try:
+                peer_nodes = self.query_by_role(NodeType.DATA)
+                for peer in peer_nodes:
+                    if peer["ip"] == self.ip:
+                        continue
+                    
+                    logger.info("[%s] Replicating dir delete to %s: %s", self.node_name, peer["ip"], virtual_path)
+                    try:
+                        self.send_message(
+                            peer["ip"], 9000,
+                            Message(
+                                type=MessageType.DATA_REPLICATE_DIR_DELETE,
+                                src=self.ip,
+                                dst=peer["ip"],
+                                payload={"user": user, "virtual_path": virtual_path}
+                            ),
+                            await_response=False
+                        )
+                    except Exception as e:
+                        logger.warning("[%s] Failed to replicate dir delete to %s: %s", self.node_name, peer["ip"], e)
+            except Exception as e:
+                logger.warning("[%s] Error broadcasting dir delete: %s", self.node_name, e)
+        
+        t = threading.Thread(target=broadcast, daemon=True)
+        t.start()
+
+    def _replicate_file_delete(self, user: str, virtual_path: str):
+        """
+        Replica la eliminación de un archivo a todos los otros DataNodes.
+        Se ejecuta en un hilo separado para no bloquear la operación original.
+        """
+        def broadcast():
+            try:
+                peer_nodes = self.query_by_role(NodeType.DATA)
+                for peer in peer_nodes:
+                    if peer["ip"] == self.ip:
+                        continue
+                    
+                    logger.info("[%s] Replicating file delete to %s: %s", self.node_name, peer["ip"], virtual_path)
+                    try:
+                        self.send_message(
+                            peer["ip"], 9000,
+                            Message(
+                                type=MessageType.DATA_REPLICATE_FILE_DELETE,
+                                src=self.ip,
+                                dst=peer["ip"],
+                                payload={"user": user, "virtual_path": virtual_path}
+                            ),
+                            await_response=False
+                        )
+                    except Exception as e:
+                        logger.warning("[%s] Failed to replicate file delete to %s: %s", self.node_name, peer["ip"], e)
+            except Exception as e:
+                logger.warning("[%s] Error broadcasting file delete: %s", self.node_name, e)
+        
+        t = threading.Thread(target=broadcast, daemon=True)
+        t.start()
+
+    def _replicate_rename(self, user: str, old_virtual_path: str, new_virtual_path: str):
+        """
+        Replica el renombrado de archivo/directorio a todos los otros DataNodes.
+        Se ejecuta en un hilo separado para no bloquear la operación original.
+        """
+        def broadcast():
+            try:
+                peer_nodes = self.query_by_role(NodeType.DATA)
+                for peer in peer_nodes:
+                    if peer["ip"] == self.ip:
+                        continue
+                    
+                    logger.info("[%s] Replicating rename to %s: %s -> %s", self.node_name, peer["ip"], old_virtual_path, new_virtual_path)
+                    try:
+                        self.send_message(
+                            peer["ip"], 9000,
+                            Message(
+                                type=MessageType.DATA_REPLICATE_RENAME,
+                                src=self.ip,
+                                dst=peer["ip"],
+                                payload={"user": user, "old_virtual_path": old_virtual_path, "new_virtual_path": new_virtual_path}
+                            ),
+                            await_response=False
+                        )
+                    except Exception as e:
+                        logger.warning("[%s] Failed to replicate rename to %s: %s", self.node_name, peer["ip"], e)
+            except Exception as e:
+                logger.warning("[%s] Error broadcasting rename: %s", self.node_name, e)
+        
+        t = threading.Thread(target=broadcast, daemon=True)
+        t.start()
+
+    # --------------------------------------------------
+    # Handlers for Directory and File Replication
+    # --------------------------------------------------
+
+    def _handle_replicate_dir_create(self, message: Message) -> Message:
+        """
+        Recibe replica de creación de directorio desde otro nodo.
+        """
+        user = message.payload.get("user")
+        virtual_path = message.payload.get("virtual_path")
+        
+        logger.info("[%s] Received replicate dir create: user=%s path=%s", self.node_name, user, virtual_path)
+        
+        if not user or not virtual_path:
+            return Message(MessageType.DATA_REPLICATE_DIR_CREATE, self.ip, message.header.get("src"), 
+                         payload={}, metadata={"status": "error", "message": "Missing required fields"})
+        
+        try:
+            namespace = self.fs.get_namespace(user)
+            # Extract directory name and parent path from virtual_path
+            parts = virtual_path.rstrip("/").rsplit("/", 1)
+            if len(parts) == 2:
+                cwd, dirname = parts
+                cwd = "/" + cwd if not cwd.startswith("/") else cwd
+            else:
+                cwd = "/"
+                dirname = virtual_path.lstrip("/")
+            
+            # Create directory if it doesn't exist
+            try:
+                self.fs.make_dir(namespace, cwd, dirname)
+                logger.info("[%s] Replicated dir created: %s/%s", self.node_name, user, virtual_path)
+            except FileExistsError:
+                logger.info("[%s] Dir already exists locally: %s/%s", self.node_name, user, virtual_path)
+            
+            return Message(MessageType.DATA_REPLICATE_DIR_CREATE, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "OK"})
+        
+        except Exception as e:
+            logger.exception("[%s] Error replicating dir create: %s", self.node_name, e)
+            return Message(MessageType.DATA_REPLICATE_DIR_CREATE, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "error", "message": str(e)})
+
+    def _handle_replicate_dir_delete(self, message: Message) -> Message:
+        """
+        Recibe replica de eliminación de directorio desde otro nodo.
+        """
+        user = message.payload.get("user")
+        virtual_path = message.payload.get("virtual_path")
+        
+        logger.info("[%s] Received replicate dir delete: user=%s path=%s", self.node_name, user, virtual_path)
+        
+        if not user or not virtual_path:
+            return Message(MessageType.DATA_REPLICATE_DIR_DELETE, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "error", "message": "Missing required fields"})
+        
+        try:
+            namespace = self.fs.get_namespace(user)
+            # Extract directory name and parent path from virtual_path
+            parts = virtual_path.rstrip("/").rsplit("/", 1)
+            if len(parts) == 2:
+                cwd, dirname = parts
+                cwd = "/" + cwd if not cwd.startswith("/") else cwd
+            else:
+                cwd = "/"
+                dirname = virtual_path.lstrip("/")
+            
+            # Remove directory if it exists
+            try:
+                self.fs.remove_dir(namespace, cwd, dirname)
+                logger.info("[%s] Replicated dir deleted: %s/%s", self.node_name, user, virtual_path)
+            except FileNotFoundError:
+                logger.info("[%s] Dir does not exist locally: %s/%s", self.node_name, user, virtual_path)
+            
+            return Message(MessageType.DATA_REPLICATE_DIR_DELETE, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "OK"})
+        
+        except Exception as e:
+            logger.exception("[%s] Error replicating dir delete: %s", self.node_name, e)
+            return Message(MessageType.DATA_REPLICATE_DIR_DELETE, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "error", "message": str(e)})
+
+    def _handle_replicate_file_delete(self, message: Message) -> Message:
+        """
+        Recibe replica de eliminación de archivo desde otro nodo.
+        """
+        user = message.payload.get("user")
+        virtual_path = message.payload.get("virtual_path")
+        
+        logger.info("[%s] Received replicate file delete: user=%s path=%s", self.node_name, user, virtual_path)
+        
+        if not user or not virtual_path:
+            return Message(MessageType.DATA_REPLICATE_FILE_DELETE, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "error", "message": "Missing required fields"})
+        
+        try:
+            namespace = self.fs.get_namespace(user)
+            # Extract filename and parent path from virtual_path
+            parts = virtual_path.rstrip("/").rsplit("/", 1)
+            if len(parts) == 2:
+                cwd, filename = parts
+                cwd = "/" + cwd if not cwd.startswith("/") else cwd
+            else:
+                cwd = "/"
+                filename = virtual_path.lstrip("/")
+            
+            # Delete file if it exists
+            try:
+                self.fs.delete_file(namespace, cwd, filename)
+                logger.info("[%s] Replicated file deleted: %s/%s", self.node_name, user, virtual_path)
+            except FileNotFoundError:
+                logger.info("[%s] File does not exist locally: %s/%s", self.node_name, user, virtual_path)
+            
+            return Message(MessageType.DATA_REPLICATE_FILE_DELETE, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "OK"})
+        
+        except Exception as e:
+            logger.exception("[%s] Error replicating file delete: %s", self.node_name, e)
+            return Message(MessageType.DATA_REPLICATE_FILE_DELETE, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "error", "message": str(e)})
+
+    def _handle_replicate_rename(self, message: Message) -> Message:
+        """
+        Recibe replica de renombrado desde otro nodo.
+        """
+        user = message.payload.get("user")
+        old_virtual_path = message.payload.get("old_virtual_path")
+        new_virtual_path = message.payload.get("new_virtual_path")
+        
+        logger.info("[%s] Received replicate rename: user=%s %s -> %s", self.node_name, user, old_virtual_path, new_virtual_path)
+        
+        if not user or not old_virtual_path or not new_virtual_path:
+            return Message(MessageType.DATA_REPLICATE_RENAME, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "error", "message": "Missing required fields"})
+        
+        try:
+            namespace = self.fs.get_namespace(user)
+            # Extract old name and parent path
+            old_parts = old_virtual_path.rstrip("/").rsplit("/", 1)
+            if len(old_parts) == 2:
+                cwd, old_name = old_parts
+                cwd = "/" + cwd if not cwd.startswith("/") else cwd
+            else:
+                cwd = "/"
+                old_name = old_virtual_path.lstrip("/")
+            
+            # Extract new name
+            new_parts = new_virtual_path.rstrip("/").rsplit("/", 1)
+            new_name = new_parts[-1]
+            
+            # Rename if old path exists
+            try:
+                self.fs.rename_path(namespace, cwd, old_name, new_name)
+                logger.info("[%s] Replicated rename completed: %s -> %s", self.node_name, old_virtual_path, new_virtual_path)
+            except FileNotFoundError:
+                logger.info("[%s] Source path does not exist locally: %s", self.node_name, old_virtual_path)
+            
+            return Message(MessageType.DATA_REPLICATE_RENAME, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "OK"})
+        
+        except Exception as e:
+            logger.exception("[%s] Error replicating rename: %s", self.node_name, e)
+            return Message(MessageType.DATA_REPLICATE_RENAME, self.ip, message.header.get("src"),
+                         payload={}, metadata={"status": "error", "message": str(e)})
